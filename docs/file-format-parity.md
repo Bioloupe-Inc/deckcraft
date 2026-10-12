@@ -48,7 +48,7 @@ PowerPoint opens and saves; Viewer = opens only).
 | Online video (YouTube embeds) | yes | no | Cloud feature |
 | Embedded OLE objects | yes | kept on round trip (opaque), not insertable or editable | `ShapeKind::Opaque` |
 | 3-D models (`.glb`) | yes | no | |
-| Embedded fonts | yes | no | `p:embeddedFontLst` ignored |
+| Embedded fonts | yes | kept, not used | `p:embeddedFontLst` and its `.fntdata` parts survive a save; text uses installed or substitute fonts |
 
 ## PPTX coverage (PresentationML / DrawingML)
 
@@ -72,7 +72,7 @@ the round trip even though DeckCraft doesn't model it.
 | Text warp (`prstTxWarp`) | yes | yes | Not rendered |
 | Pictures with crop, recolour, duotone, alpha, luminance | yes | yes | |
 | Tables with styles | yes | yes | |
-| Charts (`c:chartSpace`) | yes | yes | Original XML kept in `Chart.raw` |
+| Charts (`c:chartSpace`) | yes | yes | Original XML kept in `Chart.raw`; embedded workbook, chart style and colour parts kept in `Chart.links` (the workbook only while the chart is unedited) |
 | Charts (`cx:` chartex: waterfall, funnel, treemap, sunburst, histogram, box) | no | no | |
 | SmartArt (`dgm`) | drawing part only, as a group | as shapes | Diagram data model lost on save |
 | Equations (OMML, `a14:m`) | no | no | PR #55 open |
@@ -83,8 +83,8 @@ the round trip even though DeckCraft doesn't model it.
 | Comments: legacy | yes | yes | |
 | Comments: modern threaded (`p188`) | yes | no (written as legacy) | Replies and resolved state lost (#70) |
 | Unknown slide-level elements (`graphicFrame` OLE, extensions, `mc:AlternateContent`) | kept | kept | Rendered as a labelled placeholder with the preview picture when present |
-| Tags, custom XML, VBA | no / no / no | | |
-| Embedded fonts | no | no | |
+| Tags, custom XML, VBA | no / kept / no | no / kept / no | Unmodelled package and presentation relationships (custom properties, printer settings, custom XML) are carried through save with their parts and ids (`PartLink`); thumbnails, signatures and macros are dropped |
+| Embedded fonts | kept | kept | |
 | Encryption (password to open) | no | no | |
 
 ### What would move the PPTX number

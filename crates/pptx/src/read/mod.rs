@@ -14,12 +14,12 @@ use std::sync::Arc;
 use deckcraft_geom::{Size, emu_to_pt};
 use deckcraft_model::text::TextBody;
 use deckcraft_model::{
-    Background, Comment, CustomShow, HeaderFooter, Layout, LayoutId, LayoutType, Master, MasterId, MediaId, MediaItem, PhType, Presentation,
-    Properties, Section, ShowSettings, Slide, SlideId, defaults,
+    Background, Comment, CustomShow, EmbeddedFont, HeaderFooter, Layout, LayoutId, LayoutType, Master, MasterId, MediaId, MediaItem, PartLink,
+    PhType, Presentation, Properties, Section, ShowSettings, Slide, SlideId, defaults,
 };
 
 use crate::PptxError;
-use crate::opc::{self, Package, Rels};
+use crate::opc::{self, Package, Rel, Rels};
 use crate::xml::{Doc, El, Node};
 
 /// Import state shared by all parts.
@@ -159,6 +159,81 @@ pub fn resolve_mc(el: &mut El, depth: usize) {
     }
 }
 
+/// Deepest chain of kept parts followed through their own relationships.
+const MAX_LINK_DEPTH: usize = 4;
+
+/// The relationships in `rels` that `keep` selects, with their parts (read as media) and, in
+/// turn, every relationship of those parts: carried through save as they were.
+pub fn part_links(imp: &mut Imp, rels: &Rels, keep: &dyn Fn(&Rel) -> bool, depth: usize) -> Vec<PartLink> {
+    let mut out = vec![];
+    for r in rels.items.iter().filter(|r| keep(r)).take(1000) {
+        let link = |media, part: String, links| PartLink { id: r.id.clone(), kind: r.ty.clone(), part, media, links };
+        if r.external {
+            out.push(link(imp.media_link(&r.target), String::new(), vec![]));
+            continue;
+        }
+        let Some(media) = imp.media_for(&r.target) else {
+            log::warn!("pptx: {} relationship {} points at missing {}; dropped", r.kind, r.id, r.target);
+            continue;
+        };
+        let links = if depth < MAX_LINK_DEPTH {
+            let own = imp.pkg.rels(&r.target);
+            part_links(imp, &own, &|_| true, depth + 1)
+        } else {
+            vec![]
+        };
+        let part = imp.pkg.original_name(&r.target).unwrap_or(&r.target).to_string();
+        out.push(link(media, part, links));
+    }
+    out
+}
+
+/// Relationship ids an element (or a descendant) refers to.
+fn rel_ids_used(el: &El) -> HashSet<String> {
+    fn rec(e: &El, out: &mut HashSet<String>, depth: usize) {
+        if depth > crate::xml::MAX_DEPTH {
+            return;
+        }
+        for (k, v) in &e.attrs {
+            if k.starts_with("r:") && !v.is_empty() {
+                out.insert(v.clone());
+            }
+        }
+        for c in e.elements() {
+            rec(c, out, depth + 1);
+        }
+    }
+    let mut out = HashSet::new();
+    rec(el, &mut out, 0);
+    out
+}
+
+/// `p:embeddedFontLst` → fonts, their files read as media.
+fn embedded_fonts(imp: &mut Imp, pres: &Part, list: &El) -> Vec<EmbeddedFont> {
+    let mut out = vec![];
+    for f in list.children_named("embeddedFont").take(1000) {
+        let Some(font) = f.child("font") else { continue };
+        let mut file = |style: &str| {
+            let rel = f.child(style).and_then(|e| e.attr("r:id")).and_then(|id| pres.rels.get(id)).filter(|r| !r.external)?;
+            imp.media_for(&rel.target)
+        };
+        let ef = EmbeddedFont {
+            typeface: font.attr("typeface").unwrap_or("").to_string(),
+            panose: font.attr("panose").map(String::from),
+            pitch_family: font.attr("pitchFamily").and_then(|v| v.trim().parse().ok()),
+            charset: font.attr("charset").and_then(|v| v.trim().parse().ok()),
+            regular: file("regular"),
+            bold: file("bold"),
+            italic: file("italic"),
+            bold_italic: file("boldItalic"),
+        };
+        if [ef.regular, ef.bold, ef.italic, ef.bold_italic].iter().any(Option::is_some) {
+            out.push(ef);
+        }
+    }
+    out
+}
+
 fn load(pkg: &Package, name: &str) -> Option<Doc> {
     let mut d = pkg.xml(name)?;
     resolve_mc(&mut d.root, 0);
@@ -269,6 +344,43 @@ pub fn import(bytes: &[u8]) -> Result<Presentation, PptxError> {
     if let Some(dts) = pres_el.child("defaultTextStyle") {
         p.default_text_style = dml::list_style(&mut imp, &pres_part, dts);
     }
+    if let Some(l) = pres_el.child("embeddedFontLst") {
+        p.embedded_fonts = embedded_fonts(&mut imp, &pres_part, l);
+    }
+    // Parts DeckCraft doesn't model, carried through save: the package's own (custom
+    // properties…) and the presentation's (printer settings, custom XML…). Relationships the
+    // writer makes itself, or that XML it doesn't keep refers to, are left out; so are digital
+    // signatures and the thumbnail, which a save makes stale, and macros, which a .pptx can't hold.
+    p.package_links = part_links(
+        &mut imp,
+        &root_rels,
+        &|r| !matches!(r.kind.as_str(), "officeDocument" | "core-properties" | "extended-properties" | "origin" | "thumbnail"),
+        0,
+    );
+    let referenced = rel_ids_used(pres_el);
+    p.links = part_links(
+        &mut imp,
+        &pres_part.rels,
+        &|r| {
+            !referenced.contains(&r.id)
+                && !matches!(
+                    r.kind.as_str(),
+                    "slideMaster"
+                        | "slide"
+                        | "notesMaster"
+                        | "handoutMaster"
+                        | "theme"
+                        | "presProps"
+                        | "viewProps"
+                        | "tableStyles"
+                        | "commentAuthors"
+                        | "authors"
+                        | "font"
+                        | "vbaProject"
+                )
+        },
+        0,
+    );
 
     // Masters and layouts.
     let mut layout_by_part: HashMap<String, LayoutId> = HashMap::new();

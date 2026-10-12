@@ -511,6 +511,8 @@ pub fn blank_presentation(size: Size, theme: Theme, title_slide: bool) -> Presen
         first_slide_number: 1,
         next_id: next.max(256),
         embedded_fonts: vec![],
+        links: vec![],
+        package_links: vec![],
         raw_ext: None,
     };
     if title_slide {

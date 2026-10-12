@@ -755,6 +755,38 @@ pub struct MediaItem {
     pub link: Option<String>,
 }
 
+/// A font embedded in the deck (`p:embeddedFont`): its family and the font file of each style.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct EmbeddedFont {
+    pub typeface: String,
+    pub panose: Option<String>,
+    pub pitch_family: Option<i8>,
+    pub charset: Option<i8>,
+    pub regular: Option<MediaId>,
+    pub bold: Option<MediaId>,
+    pub italic: Option<MediaId>,
+    pub bold_italic: Option<MediaId>,
+}
+
+/// A package relationship DeckCraft doesn't model, carried from open to save so the part it
+/// points at survives: a chart's workbook and styles, custom properties, printer settings.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct PartLink {
+    /// Relationship id in the owning part; kept XML refers to the part by it.
+    pub id: String,
+    /// Relationship type URI.
+    pub kind: String,
+    /// Part name in the package it came from (`ppt/embeddings/Sheet1.xlsx`), reused on save
+    /// when free.
+    pub part: String,
+    /// The part's bytes and content type, or its URL for an external target.
+    pub media: MediaId,
+    /// The part's own relationships.
+    pub links: Vec<PartLink>,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Presentation {
@@ -776,8 +808,15 @@ pub struct Presentation {
     pub first_slide_number: u32,
     /// Next free shape/slide/layout/media id.
     pub next_id: u32,
-    /// Embedded fonts (family names; bytes in `media`).
-    pub embedded_fonts: Vec<(String, MediaId)>,
+    /// Fonts embedded in the deck (`p:embeddedFontLst`; bytes in `media`).
+    pub embedded_fonts: Vec<EmbeddedFont>,
+    /// Relationships of the presentation part DeckCraft doesn't model (printer settings, custom
+    /// XML…), kept so their parts survive a save.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub links: Vec<PartLink>,
+    /// The same for the package itself (custom document properties…).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub package_links: Vec<PartLink>,
     /// Unmodelled presentation-level XML kept for round-trip.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub raw_ext: Option<String>,

@@ -1,6 +1,6 @@
 //! Open Packaging Conventions: the zip container, part names, relationships and content types.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::{Cursor, Read, Write};
 
 use crate::PptxError;
@@ -108,7 +108,7 @@ impl Package {
             let (Some(id), Some(ty), Some(target)) = (r.attr("Id"), r.attr("Type"), r.attr("Target")) else { continue };
             let external = r.attr("TargetMode").is_some_and(|m| m.eq_ignore_ascii_case("external"));
             let target = if external { target.to_string() } else { resolve(&base, target) };
-            out.items.push(Rel { id: id.to_string(), kind: ty.rsplit('/').next().unwrap_or(ty).to_string(), target, external });
+            out.items.push(Rel { id: id.to_string(), kind: ty.rsplit('/').next().unwrap_or(ty).to_string(), ty: ty.to_string(), target, external });
         }
         out
     }
@@ -137,6 +137,8 @@ pub struct Rel {
     pub id: String,
     /// Last segment of the relationship type (`slide`, `image`, `media`…).
     pub kind: String,
+    /// The full relationship type URI.
+    pub ty: String,
     /// Absolute part name for internal targets; the URL for external ones.
     pub target: String,
     pub external: bool,
@@ -256,14 +258,31 @@ impl RelsOut {
         if let Some((id, ..)) = self.items.iter().find(|(_, t, tg, e)| *t == ty && tg == target && *e == external) {
             return id.clone();
         }
-        let id = format!("rId{}", self.items.len() + 1);
-        self.items.push((id.clone(), ty, target.to_string(), external));
-        id
+        self.add_new(kind, target, external)
     }
     /// Always add a new relationship even if an identical one exists.
     pub fn add_new(&mut self, kind: &str, target: &str, external: bool) -> String {
+        let id = self.unused_id();
+        self.push(id, kind, target, external)
+    }
+    /// Add a relationship under `id` when that id is free (kept XML refers to it), else under a
+    /// new one. Returns the id used.
+    pub fn keep(&mut self, id: &str, kind: &str, target: &str, external: bool) -> String {
+        let usable = id.chars().next().is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+            && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == '.')
+            && !self.items.iter().any(|(i, ..)| i == id);
+        let id = if usable { id.to_string() } else { self.unused_id() };
+        self.push(id, kind, target, external)
+    }
+    fn unused_id(&self) -> String {
+        let mut n = self.items.len() + 1;
+        while self.items.iter().any(|(i, ..)| *i == format!("rId{n}")) {
+            n += 1;
+        }
+        format!("rId{n}")
+    }
+    fn push(&mut self, id: String, kind: &str, target: &str, external: bool) -> String {
         let ty = if kind.starts_with("http") { kind.to_string() } else { format!("{RT_BASE}{kind}") };
-        let id = format!("rId{}", self.items.len() + 1);
         self.items.push((id.clone(), ty, target.to_string(), external));
         id
     }
@@ -285,6 +304,8 @@ impl RelsOut {
 /// A package being written.
 pub struct PackageOut {
     files: Vec<(String, Vec<u8>, bool)>,
+    /// Lowercase names of `files`.
+    names: HashSet<String>,
     defaults: Vec<(String, String)>,
     overrides: Vec<(String, String)>,
 }
@@ -293,6 +314,7 @@ impl Default for PackageOut {
     fn default() -> Self {
         PackageOut {
             files: vec![],
+            names: HashSet::new(),
             defaults: vec![
                 ("rels".into(), "application/vnd.openxmlformats-package.relationships+xml".into()),
                 ("xml".into(), "application/xml".into()),
@@ -306,13 +328,43 @@ impl PackageOut {
     /// Add an XML part with its content type override.
     pub fn xml_part(&mut self, name: &str, content_type: &str, data: Vec<u8>) {
         self.overrides.push((format!("/{name}"), content_type.to_string()));
-        self.files.push((name.to_string(), data, true));
+        self.file(name, data, true);
     }
     pub fn rels(&mut self, part: &str, rels: &RelsOut) {
         if rels.items.is_empty() {
             return;
         }
-        self.files.push((rels_path(part), rels.to_xml(), true));
+        self.file(&rels_path(part), rels.to_xml(), true);
+    }
+    /// Add a part kept from the source package, compressed, with a content type override.
+    pub fn kept_part(&mut self, name: &str, content_type: &str, data: Vec<u8>) {
+        self.overrides.push((format!("/{name}"), content_type.to_string()));
+        self.file(name, data, true);
+    }
+    fn file(&mut self, name: &str, data: Vec<u8>, compress: bool) {
+        self.names.insert(name.to_ascii_lowercase());
+        self.files.push((name.to_string(), data, compress));
+    }
+    /// Is a part of this name already written?
+    pub fn taken(&self, name: &str) -> bool {
+        self.names.contains(&name.to_ascii_lowercase())
+    }
+    /// `wanted`, or a variant of it, that names no written part and none the writer generates.
+    pub fn free_name(&self, wanted: &str) -> String {
+        let wanted = wanted.trim_start_matches('/');
+        let free = |n: &str| !n.is_empty() && !self.taken(n) && !generated_name(n);
+        if free(wanted) {
+            return wanted.to_string();
+        }
+        let (stem, ext) = match wanted.rsplit_once('.') {
+            Some((s, e)) if !e.contains('/') => (s, format!(".{e}")),
+            _ => (wanted, String::new()),
+        };
+        if let Some(name) = (1..1000).map(|n| format!("{stem}_{n}{ext}")).find(|n| free(n)) {
+            return name;
+        }
+        // Only a name the writer reserves whatever its suffix (a relationships part) gets here.
+        (self.files.len()..).map(|n| format!("ppt/kept/part{n}.bin")).find(|n| free(n)).unwrap_or_default()
     }
     /// Add a binary part; its extension gets a Default content type.
     pub fn binary(&mut self, name: &str, content_type: &str, data: Vec<u8>) {
@@ -322,7 +374,7 @@ impl PackageOut {
         } else if !self.defaults.iter().any(|(e, c)| *e == ext && c == content_type) {
             self.overrides.push((format!("/{name}"), content_type.to_string()));
         }
-        self.files.push((name.to_string(), data, false));
+        self.file(name, data, false);
     }
     pub fn finish(self) -> Result<Vec<u8>, PptxError> {
         let mut ct = W::new();
@@ -351,6 +403,42 @@ impl PackageOut {
     }
 }
 
+/// Is `name` one the writer generates (or a relationships part), so a kept part must not take it?
+fn generated_name(name: &str) -> bool {
+    const FIXED: [&str; 8] = [
+        "[content_types].xml",
+        "ppt/presentation.xml",
+        "ppt/presprops.xml",
+        "ppt/viewprops.xml",
+        "ppt/tablestyles.xml",
+        "ppt/commentauthors.xml",
+        "docprops/core.xml",
+        "docprops/app.xml",
+    ];
+    const NUMBERED: [&str; 11] = [
+        "ppt/slides/slide",
+        "ppt/slidelayouts/slidelayout",
+        "ppt/slidemasters/slidemaster",
+        "ppt/notesslides/notesslide",
+        "ppt/notesmasters/notesmaster",
+        "ppt/theme/theme",
+        "ppt/comments/comment",
+        "ppt/charts/chart",
+        "ppt/media/image",
+        "ppt/media/media",
+        "ppt/fonts/font",
+    ];
+    let n = name.to_ascii_lowercase();
+    if FIXED.contains(&n.as_str()) || n.ends_with(".rels") || n.contains("_rels/") {
+        return true;
+    }
+    NUMBERED.iter().any(|p| {
+        n.strip_prefix(p)
+            .and_then(|rest| rest.split_once('.'))
+            .is_some_and(|(num, ext)| !num.is_empty() && num.bytes().all(|b| b.is_ascii_digit()) && !ext.contains('/'))
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -366,5 +454,17 @@ mod tests {
         assert_eq!(relative("ppt/slides/slide1.xml", "ppt/media/image1.png"), "../media/image1.png");
         assert_eq!(relative("ppt/presentation.xml", "ppt/slides/slide1.xml"), "slides/slide1.xml");
         assert_eq!(relative("ppt/slides/slide1.xml", "ppt/slides/slide2.xml"), "slide2.xml");
+    }
+
+    #[test]
+    fn kept_parts_avoid_names_the_writer_uses() {
+        let mut pkg = PackageOut::default();
+        assert_eq!(pkg.free_name("ppt/embeddings/Sheet1.xlsx"), "ppt/embeddings/Sheet1.xlsx");
+        assert_eq!(pkg.free_name("/docProps/custom.xml"), "docProps/custom.xml");
+        assert_eq!(pkg.free_name("ppt/media/image3.png"), "ppt/media/image3_1.png");
+        assert_eq!(pkg.free_name("ppt/slides/_rels/slide1.xml.rels"), "ppt/kept/part0.bin");
+        pkg.kept_part("ppt/charts/style1.xml", "application/xml", vec![]);
+        assert_eq!(pkg.free_name("ppt/charts/style1.xml"), "ppt/charts/style1_1.xml");
+        assert_eq!(pkg.free_name("ppt/charts/chart2.xml"), "ppt/charts/chart2_1.xml");
     }
 }
