@@ -37,7 +37,7 @@ PowerPoint opens and saves; Viewer = opens only).
 | Kind | PowerPoint | DeckCraft | Notes |
 |---|---|---|---|
 | PNG, JPEG, GIF (animated), BMP, TIFF, WebP | yes | yes | `image` 0.25; animated GIFs play since #39 |
-| SVG | yes (with PNG fallback) | kept, not rendered | Read, inserted and saved with or without a PNG fallback (`asvg:svgBlip`); the PNG fallback shows, SVG-only pictures (Office icons) draw blank |
+| SVG | yes (with PNG fallback) | yes | Read, inserted and saved with or without a PNG fallback (`asvg:svgBlip`). SVG-only pictures (Office icons) are drawn by `resvg` at their on-screen size; text inside an SVG isn't drawn; with a fallback the PNG shows |
 | EMF / WMF | yes | **no** | Common in decks made on Windows: blank picture |
 | HEIC | yes (macOS) | no | |
 | Audio: MP3, AAC/M4A, ALAC, WAV, AIFF, CAF, FLAC, Ogg Vorbis, Opus | yes (Ogg/Opus partly) | yes | Pure-Rust decoders in `crates/media`, `crates/opus` |
@@ -93,7 +93,7 @@ the round trip even though DeckCraft doesn't model it.
    embedded fonts, every transition and animation) in a corpus repo, with import → render → export
    → re-import checks in CI and a PowerPoint reference render for each (owner runs PowerPoint).
 2. The round-trip losses above (#70, #74, #77).
-3. EMF/WMF and SVG rendering.
+3. EMF/WMF rendering.
 
 ## Revision history
 

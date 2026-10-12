@@ -523,3 +523,16 @@ fn hyperlinks_draw_in_the_hyperlink_colour_underlined() {
     let own = px(&run_deck(RunProps { link, fill: red.clone(), ..Default::default() }));
     assert_eq!(diff(&own, &px(&run_deck(RunProps { fill: red, underline: Some("sng".into()), ..Default::default() }))), 0);
 }
+
+#[test]
+fn svg_pictures_draw_at_their_size_and_bad_ones_are_refused() {
+    let svg = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 10"><rect width="20" height="10" fill="#00ff00"/></svg>"##;
+    let img = crate::images::rasterize_svg(svg, 256).expect("svg");
+    assert_eq!(img.dimensions(), (256, 128));
+    assert_eq!(img.get_pixel(128, 64).0, [0, 255, 0, 255]);
+    for bad in [&b"<svg"[..], b"<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"0\" height=\"0\"/>", b"\x89PNG not svg"] {
+        assert!(crate::images::rasterize_svg(bad, 256).is_none());
+    }
+    // The side is capped.
+    assert_eq!(crate::images::rasterize_svg(svg, u32::MAX).map(|i| i.width()), Some(4096));
+}
