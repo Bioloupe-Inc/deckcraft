@@ -407,6 +407,7 @@ pub fn import(bytes: &[u8]) -> Result<Presentation, PptxError> {
         let part = Part::new(&pkg, path, doc);
         let layout = part.rels.first_of("slideLayout").and_then(|r| layout_by_part.get(&opc::norm(&r.target)).copied()).unwrap_or(fallback_layout);
         let mut slide = read_slide(&mut imp, &part, doc, *id, layout);
+        slide.file_id = Some(*file_id);
         // Notes.
         if let Some(n) = part.rels.first_of("notesSlide")
             && let Some(nd) = load(&pkg, &n.target)

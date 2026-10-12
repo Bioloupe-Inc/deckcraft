@@ -402,3 +402,77 @@ fn unknown_parts_are_carried_through() {
     let (_, item) = rel_of_type(&saved, "ppt/presentation.xml", &format!("{RT}/customXml")).expect("customXml kept");
     assert_eq!(related(&saved, &item, &format!("{RT}/customXmlProps")), (b"<ds:datastoreItem xmlns:ds=\"urn:y\"/>".to_vec(), props_ct.into()));
 }
+
+fn session_of(bytes: &[u8]) -> deckcraft_engine::Session {
+    let mut s = deckcraft_engine::Session::new();
+    let data = deckcraft_engine::cmd::base64_encode(bytes);
+    s.execute("file.openBytes", &serde_json::json!({"name": "deck.pptx", "data": data})).expect("open");
+    s
+}
+
+fn save(s: &mut deckcraft_engine::Session) -> Vec<u8> {
+    let v = s.execute("file.saveBytes", &serde_json::json!({"format": "pptx"})).expect("save");
+    deckcraft_engine::cmd::base64_decode(v["data"].as_str().expect("data")).expect("base64")
+}
+
+/// (title, file slide id as `document.inspect` reports it) per slide.
+fn inspected_ids(s: &mut deckcraft_engine::Session) -> Vec<(String, u64)> {
+    let v = s.execute("document.inspect", &serde_json::json!({})).expect("inspect");
+    v["slides"]
+        .as_array()
+        .expect("slides")
+        .iter()
+        .map(|x| (x["title"].as_str().unwrap_or("").to_string(), x["fileId"].as_u64().unwrap_or_else(|| panic!("no fileId in {x}"))))
+        .collect()
+}
+
+/// The `p:sldId` ids of `presentation.xml`, in slide order.
+fn sld_ids(pres: &str) -> Vec<u64> {
+    let list = &pres[pres.find("<p:sldIdLst>").expect("sldIdLst")..pres.find("</p:sldIdLst>").expect("sldIdLst end")];
+    list.split("<p:sldId ").skip(1).map(|t| attr(&format!(" {t}"), "id").and_then(|v| v.parse().ok()).expect("sldId id")).collect()
+}
+
+/// (title, `p:sldId` id) per slide of a saved deck, in slide order.
+fn saved_ids(bytes: &[u8]) -> Vec<(String, u64)> {
+    let ids = sld_ids(&Pkg::read(bytes).text("ppt/presentation.xml"));
+    let titles = inspected_ids(&mut session_of(bytes)).into_iter().map(|(t, _)| t);
+    titles.zip(ids).collect()
+}
+
+fn sorted(mut v: Vec<(String, u64)>) -> Vec<(String, u64)> {
+    v.sort();
+    v
+}
+
+#[test]
+fn slide_ids_survive_reorder_add_and_save() {
+    let mut s = deckcraft_engine::Session::with_new();
+    for t in ["A", "B", "C"] {
+        s.execute("slide.new", &serde_json::json!({"title": t})).expect("slide.new");
+    }
+    s.execute("slide.delete", &serde_json::json!({"index": 0})).expect("delete");
+    // The file gives the slides ids that aren't 256, 257, 258.
+    let mut pkg = Pkg::read(&save(&mut s));
+    let ids = sld_ids(&pkg.text("ppt/presentation.xml"));
+    for (from, to) in ids.iter().zip([300, 412, 299]) {
+        pkg.patch("ppt/presentation.xml", &format!(r#"<p:sldId id="{from}" "#), &format!(r#"<p:sldId id="{to}" "#));
+    }
+    let mut s = session_of(&pkg.bytes());
+    let original = vec![("A".to_string(), 300), ("B".to_string(), 412), ("C".to_string(), 299)];
+    assert_eq!(inspected_ids(&mut s), original);
+
+    s.execute("slide.move", &serde_json::json!({"from": 2, "to": 0})).expect("move");
+    s.execute("slide.new", &serde_json::json!({"title": "D"})).expect("slide.new");
+    // A copy of A, moved in front of it, doesn't take A's id.
+    s.execute("slide.duplicate", &serde_json::json!({"index": 2})).expect("duplicate");
+    s.execute("slide.move", &serde_json::json!({"from": 3, "to": 0})).expect("move");
+    let before = inspected_ids(&mut s);
+    assert_eq!(before.iter().map(|(t, _)| t.as_str()).collect::<Vec<_>>(), ["A", "C", "D", "A", "B"]);
+    // The original slides keep their ids; new ones take the next unused id.
+    let mut expect = original.clone();
+    expect.extend([("D".to_string(), 413), ("A".to_string(), 414)]);
+    assert_eq!(sorted(before.clone()), sorted(expect));
+    let saved = save(&mut s);
+    assert_eq!(saved_ids(&saved), before);
+    assert_eq!(inspected_ids(&mut session_of(&saved)), before);
+}

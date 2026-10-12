@@ -58,7 +58,7 @@ the round trip even though DeckCraft doesn't model it.
 | Part / feature | Read | Write | Notes |
 |---|---|---|---|
 | OPC package, content types, relationships | yes | yes | Content types found anywhere in the zip (#19); zip bombs capped; relationship cycles bounded |
-| Presentation, slide size, sections (p14), custom shows | yes | yes | |
+| Presentation, slide size, sections (p14), custom shows | yes | yes | Slide ids (`p:sldId`) kept through save; new slides take the next unused id |
 | Slide masters, layouts, placeholders and inheritance | yes | yes | |
 | Themes: colour, font (Latin/EA/CS), effect schemes, background styles | yes | yes | Unknown theme parts kept |
 | Notes slides and notes master | yes | yes | No notes-master editing view |

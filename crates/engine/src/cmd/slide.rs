@@ -166,6 +166,7 @@ fn duplicate(s: &mut Session, p: &Value) -> Result<Value> {
             let Some(src) = doc.slides.get(*i).map(|x| x.as_ref().clone()) else { continue };
             let mut copy = src;
             copy.id = SlideId(doc.alloc_id());
+            copy.file_id = Some(doc.next_file_slide_id());
             super::edit::reid(doc, &mut copy.shapes);
             // Animations follow the new shape ids by position.
             let old_ids: Vec<_> = doc

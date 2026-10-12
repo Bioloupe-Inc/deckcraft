@@ -473,10 +473,20 @@ pub struct Comment {
     pub shape: Option<ShapeId>,
 }
 
+/// PowerPoint slide ids (`ST_SlideId`) run from 256 to 2^31 - 1.
+const FIRST_FILE_SLIDE_ID: u32 = 256;
+const LAST_FILE_SLIDE_ID: u32 = 0x7FFF_FFFF;
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Slide {
     pub id: SlideId,
+    /// The slide's id in a PowerPoint file (`p:sldId`, 256 or more), read on open and written
+    /// back so whatever refers to the slide by it survives a save. New slides and copies take
+    /// [`Presentation::next_file_slide_id`]; one without (a deck built in code) gets an id on save
+    /// ([`Presentation::file_slide_ids`]).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub file_id: Option<u32>,
     pub layout: LayoutId,
     pub name: String,
     pub shapes: Vec<Shape>,
@@ -497,6 +507,7 @@ impl Default for Slide {
     fn default() -> Self {
         Slide {
             id: SlideId(0),
+            file_id: None,
             layout: LayoutId(0),
             name: String::new(),
             shapes: vec![],
@@ -853,6 +864,40 @@ impl Presentation {
             m = m.max(md.id.0);
         }
         self.next_id = m;
+    }
+    /// The PowerPoint slide id for a new slide: one above the highest in use (from 256), or the
+    /// lowest free one once the range runs out.
+    pub fn next_file_slide_id(&self) -> u32 {
+        let used: std::collections::HashSet<u32> = self.file_slide_ids().into_iter().collect();
+        match used.iter().max().map_or(FIRST_FILE_SLIDE_ID, |m| m.saturating_add(1)) {
+            above if above <= LAST_FILE_SLIDE_ID => above,
+            _ => (FIRST_FILE_SLIDE_ID..=LAST_FILE_SLIDE_ID).find(|i| !used.contains(i)).unwrap_or(FIRST_FILE_SLIDE_ID),
+        }
+    }
+    /// The PowerPoint slide id (`p:sldId`) each slide is saved under, in slide order: its own
+    /// `file_id` when valid and not taken by an earlier slide, else the next unused id above
+    /// every kept one (the lowest free id once the range runs out).
+    pub fn file_slide_ids(&self) -> Vec<u32> {
+        let range = FIRST_FILE_SLIDE_ID..=LAST_FILE_SLIDE_ID;
+        let mut used = std::collections::HashSet::new();
+        let kept: Vec<Option<u32>> = self.slides.iter().map(|s| s.file_id.filter(|i| range.contains(i) && used.insert(*i))).collect();
+        let mut next = used.iter().max().map_or(FIRST_FILE_SLIDE_ID, |m| m.saturating_add(1));
+        kept.into_iter()
+            .map(|k| {
+                k.unwrap_or_else(|| {
+                    loop {
+                        if !range.contains(&next) {
+                            next = FIRST_FILE_SLIDE_ID;
+                        }
+                        let id = next;
+                        next += 1;
+                        if used.insert(id) {
+                            break id;
+                        }
+                    }
+                })
+            })
+            .collect()
     }
     pub fn slide_index(&self, id: SlideId) -> Option<usize> {
         self.slides.iter().position(|s| s.id == id)

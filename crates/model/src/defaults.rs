@@ -543,7 +543,7 @@ pub fn new_slide(p: &mut Presentation, layout: LayoutId) -> Slide {
             ..Default::default()
         });
     }
-    Slide { id, layout, shapes, ..Default::default() }
+    Slide { id, file_id: Some(p.next_file_slide_id()), layout, shapes, ..Default::default() }
 }
 
 /// Layout for a kind in the first master.
