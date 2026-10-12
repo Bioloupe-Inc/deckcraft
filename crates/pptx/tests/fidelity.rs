@@ -248,3 +248,157 @@ fn svg_with_png_fallback(content_type: &str) {
     let again = deckcraft_pptx::import(&saved.bytes()).expect("reopen");
     assert!(picture(&again).svg.is_some());
 }
+
+const RT: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+const CT_XLSX: &str = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+const CT_CHART_STYLE: &str = "application/vnd.ms-office.chartstyle+xml";
+const CT_CHART_COLORS: &str = "application/vnd.ms-office.chartcolorstyle+xml";
+const CT_FONT: &str = "application/x-fontdata";
+
+/// Bytes standing in for a workbook: a zip with one entry.
+fn workbook() -> Vec<u8> {
+    let mut z = zip::ZipWriter::new(Cursor::new(Vec::new()));
+    z.start_file("xl/workbook.xml", zip::write::SimpleFileOptions::default()).expect("start");
+    z.write_all(b"<workbook/>").expect("write");
+    z.finish().expect("finish").into_inner()
+}
+
+/// The relationship of `part` with type `ty` → (id, target part).
+fn rel_of_type(pkg: &Pkg, part: &str, ty: &str) -> Option<(String, String)> {
+    let rels = String::from_utf8_lossy(pkg.get(&rels_path(part))?).to_string();
+    rels.split("<Relationship ").skip(1).find_map(|r| {
+        (attr(&format!(" {r}"), "Type")? == ty).then_some(())?;
+        let id = attr(&format!(" {r}"), "Id")?;
+        let target = attr(&format!(" {r}"), "Target")?;
+        Some((id, resolve(part, &target)))
+    })
+}
+
+/// A part's bytes and content type through the relationship of `part` with type `ty`.
+fn related(pkg: &Pkg, part: &str, ty: &str) -> (Vec<u8>, String) {
+    let (_, target) = rel_of_type(pkg, part, ty).unwrap_or_else(|| panic!("{part} lost its {ty} relationship"));
+    let data = pkg.get(&target).unwrap_or_else(|| panic!("{target} is missing")).to_vec();
+    (data, pkg.content_type(&target).unwrap_or_default())
+}
+
+fn round_trip(pkg: &Pkg) -> Pkg {
+    let p = deckcraft_pptx::import(&pkg.bytes()).expect("import");
+    Pkg::read(&deckcraft_pptx::export(&p).expect("export"))
+}
+
+#[test]
+fn chart_workbook_and_styles_are_kept() {
+    let mut p = defaults::new_presentation(None);
+    let id = ShapeId(p.alloc_id());
+    let chart = deckcraft_model::Chart {
+        categories: vec!["A".into(), "B".into()],
+        series: vec![deckcraft_model::chart::Series { name: "S1".into(), values: vec![Some(1.0), Some(2.0)], ..Default::default() }],
+        ..Default::default()
+    };
+    let shape = Shape {
+        id,
+        name: "Chart".into(),
+        xfrm: Some(Xfrm::new(50.0, 50.0, 400.0, 300.0)),
+        kind: ShapeKind::Chart(Box::new(chart)),
+        ..Default::default()
+    };
+    std::sync::Arc::make_mut(&mut p.slides[0]).shapes.push(shape);
+    let mut pkg = Pkg::read(&deckcraft_pptx::export(&p).expect("export"));
+    let (_, chart) = rel_of_type(&pkg, "ppt/slides/slide1.xml", &format!("{RT}/chart")).expect("chart part");
+    pkg.add_rel(&chart, "rId7", &format!("{RT}/package"), "../embeddings/Microsoft_Excel_Worksheet1.xlsx");
+    pkg.add_rel(&chart, "rId8", "http://schemas.microsoft.com/office/2011/relationships/chartStyle", "style1.xml");
+    pkg.add_rel(&chart, "rId9", "http://schemas.microsoft.com/office/2011/relationships/chartColorStyle", "colors1.xml");
+    pkg.patch(&chart, "</c:chartSpace>", r#"<c:externalData r:id="rId7"><c:autoUpdate val="0"/></c:externalData></c:chartSpace>"#);
+    pkg.add_part("ppt/embeddings/Microsoft_Excel_Worksheet1.xlsx", CT_XLSX, &workbook());
+    let style = br#"<cs:chartStyle xmlns:cs="http://schemas.microsoft.com/office/drawing/2012/chartStyle" id="201"/>"#;
+    let colors = br#"<cs:colorStyle xmlns:cs="http://schemas.microsoft.com/office/drawing/2012/chartStyle" meth="cycle" id="10"/>"#;
+    pkg.add_part("ppt/charts/style1.xml", CT_CHART_STYLE, style);
+    pkg.add_part("ppt/charts/colors1.xml", CT_CHART_COLORS, colors);
+
+    let saved = round_trip(&pkg);
+    let (_, chart) = rel_of_type(&saved, "ppt/slides/slide1.xml", &format!("{RT}/chart")).expect("chart part");
+    assert_eq!(related(&saved, &chart, &format!("{RT}/package")), (workbook(), CT_XLSX.to_string()));
+    assert_eq!(related(&saved, &chart, "http://schemas.microsoft.com/office/2011/relationships/chartStyle"), (style.to_vec(), CT_CHART_STYLE.into()));
+    assert_eq!(
+        related(&saved, &chart, "http://schemas.microsoft.com/office/2011/relationships/chartColorStyle"),
+        (colors.to_vec(), CT_CHART_COLORS.into())
+    );
+    // The chart still points at its workbook by a relationship id that exists.
+    let xml = saved.text(&chart);
+    let at = xml.find("<c:externalData ").expect("externalData kept");
+    let rid = attr(&xml[at..], "r:id").expect("externalData r:id");
+    assert_eq!(saved.rel_target(&chart, &rid).and_then(|t| saved.get(&t).map(<[u8]>::to_vec)), Some(workbook()));
+
+    // An edited chart no longer matches its workbook, so only the styles stay.
+    let mut p = deckcraft_pptx::import(&pkg.bytes()).expect("import");
+    for sh in &mut std::sync::Arc::make_mut(&mut p.slides[0]).shapes {
+        if let ShapeKind::Chart(c) = &mut sh.kind {
+            c.series[0].values[0] = Some(5.0);
+        }
+    }
+    let edited = Pkg::read(&deckcraft_pptx::export(&p).expect("export"));
+    let (_, chart) = rel_of_type(&edited, "ppt/slides/slide1.xml", &format!("{RT}/chart")).expect("chart part");
+    assert!(rel_of_type(&edited, &chart, &format!("{RT}/package")).is_none());
+    assert!(!edited.text(&chart).contains("externalData"));
+    assert_eq!(related(&edited, &chart, "http://schemas.microsoft.com/office/2011/relationships/chartStyle").0, style.to_vec());
+}
+
+#[test]
+fn embedded_fonts_are_kept() {
+    let mut pkg = Pkg::read(&deckcraft_pptx::export(&defaults::new_presentation(None)).expect("export"));
+    let pres = "ppt/presentation.xml";
+    let notes_sz = {
+        let t = pkg.text(pres);
+        let at = t.find("<p:notesSz ").expect("notesSz");
+        t[at..at + t[at..].find("/>").expect("notesSz end") + 2].to_string()
+    };
+    pkg.patch(
+        pres,
+        &notes_sz,
+        &format!(
+            r#"{notes_sz}<p:embeddedFontLst><p:embeddedFont><p:font typeface="Test Sans" panose="020B0604020202020204" pitchFamily="34" charset="0"/><p:regular r:id="rId90"/><p:bold r:id="rId91"/></p:embeddedFont></p:embeddedFontLst>"#
+        ),
+    );
+    pkg.add_rel(pres, "rId90", &format!("{RT}/font"), "fonts/font1.fntdata");
+    pkg.add_rel(pres, "rId91", &format!("{RT}/font"), "fonts/font2.fntdata");
+    pkg.add_part("ppt/fonts/font1.fntdata", CT_FONT, b"regular font bytes");
+    pkg.add_part("ppt/fonts/font2.fntdata", CT_FONT, b"bold font bytes");
+
+    let saved = round_trip(&pkg);
+    let xml = saved.text(pres);
+    assert!(xml.contains(r#"embedTrueTypeFonts="1""#), "{xml}");
+    let at = xml.find("<p:embeddedFont>").expect("embeddedFontLst kept");
+    let font = &xml[at..at + xml[at..].find("</p:embeddedFont>").expect("embeddedFont end")];
+    assert!(font.contains(r#"typeface="Test Sans""#) && font.contains(r#"panose="020B0604020202020204""#), "{font}");
+    for (style, bytes) in [("regular", &b"regular font bytes"[..]), ("bold", &b"bold font bytes"[..])] {
+        let s = font.find(&format!("<p:{style} ")).unwrap_or_else(|| panic!("no {style} in {font}"));
+        let part = saved.rel_target(pres, &attr(&font[s..], "r:id").expect("r:id")).expect("font relationship");
+        assert_eq!(saved.get(&part), Some(bytes), "{part}");
+        assert_eq!(saved.content_type(&part).as_deref(), Some(CT_FONT));
+    }
+}
+
+#[test]
+fn unknown_parts_are_carried_through() {
+    let mut pkg = Pkg::read(&deckcraft_pptx::export(&defaults::new_presentation(None)).expect("export"));
+    let custom_ct = "application/vnd.openxmlformats-officedocument.custom-properties+xml";
+    let custom = br#"<Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/custom-properties"/>"#;
+    pkg.add_rel("", "rId9", &format!("{RT}/custom-properties"), "docProps/custom.xml");
+    pkg.add_part("docProps/custom.xml", custom_ct, custom);
+    let printer_ct = "application/vnd.openxmlformats-officedocument.presentationml.printerSettings";
+    pkg.add_rel("ppt/presentation.xml", "rId98", &format!("{RT}/printerSettings"), "printerSettings/printerSettings1.bin");
+    pkg.add_part("ppt/printerSettings/printerSettings1.bin", printer_ct, b"\x00\x01printer");
+    // A part with relationships of its own.
+    let item_ct = "application/xml";
+    let props_ct = "application/vnd.openxmlformats-officedocument.customXmlProperties+xml";
+    pkg.add_rel("ppt/presentation.xml", "rId99", &format!("{RT}/customXml"), "../customXml/item1.xml");
+    pkg.add_part("customXml/item1.xml", item_ct, b"<b:Sources xmlns:b=\"urn:x\"/>");
+    pkg.add_rel("customXml/item1.xml", "rId1", &format!("{RT}/customXmlProps"), "itemProps1.xml");
+    pkg.add_part("customXml/itemProps1.xml", props_ct, b"<ds:datastoreItem xmlns:ds=\"urn:y\"/>");
+
+    let saved = round_trip(&pkg);
+    assert_eq!(related(&saved, "", &format!("{RT}/custom-properties")), (custom.to_vec(), custom_ct.into()));
+    assert_eq!(related(&saved, "ppt/presentation.xml", &format!("{RT}/printerSettings")), (b"\x00\x01printer".to_vec(), printer_ct.into()));
+    let (_, item) = rel_of_type(&saved, "ppt/presentation.xml", &format!("{RT}/customXml")).expect("customXml kept");
+    assert_eq!(related(&saved, &item, &format!("{RT}/customXmlProps")), (b"<ds:datastoreItem xmlns:ds=\"urn:y\"/>".to_vec(), props_ct.into()));
+}

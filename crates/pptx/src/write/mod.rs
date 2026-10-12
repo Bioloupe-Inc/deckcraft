@@ -12,7 +12,7 @@ use std::sync::Arc;
 use deckcraft_geom::Xfrm;
 use deckcraft_model::text::{Paragraph, TextBody};
 use deckcraft_model::{
-    Background, Comment, Layout, LayoutId, Master, MediaId, PhType, Placeholder, Presentation, Shape, ShapeId, Slide, SlideId, defaults,
+    Background, Comment, Layout, LayoutId, Master, MediaId, PartLink, PhType, Placeholder, Presentation, Shape, ShapeId, Slide, SlideId, defaults,
 };
 
 use crate::PptxError;
@@ -35,6 +35,9 @@ const CT_AUTHORS: &str = "application/vnd.openxmlformats-officedocument.presenta
 const CT_CORE: &str = "application/vnd.openxmlformats-package.core-properties+xml";
 const CT_APP: &str = "application/vnd.openxmlformats-officedocument.extended-properties+xml";
 
+/// Deepest chain of kept parts written through their own relationships.
+const MAX_LINK_DEPTH: usize = 4;
+
 /// Export state.
 pub struct Exp<'a> {
     pub p: &'a Presentation,
@@ -42,6 +45,7 @@ pub struct Exp<'a> {
     media_parts: HashMap<MediaId, String>,
     n_image: u32,
     n_media: u32,
+    n_font: u32,
     n_chart: u32,
     pub slide_parts: HashMap<SlideId, String>,
     pub table_styles: Vec<String>,
@@ -58,6 +62,10 @@ impl Out {
     fn new(name: &str) -> Self {
         Out { name: name.to_string(), rels: RelsOut::default() }
     }
+}
+
+fn is_font(content_type: &str) -> bool {
+    content_type.starts_with("font/") || matches!(content_type, "application/x-fontdata" | "application/x-font-ttf" | "application/x-font-otf")
 }
 
 fn ext_for(content_type: &str, name: &str, data: &[u8]) -> String {
@@ -82,6 +90,9 @@ fn ext_for(content_type: &str, name: &str, data: &[u8]) -> String {
         "audio/x-ms-wma" => "wma",
         "audio/ogg" => "ogg",
         "audio/flac" => "flac",
+        "application/x-fontdata" => "fntdata",
+        "application/x-font-ttf" | "font/ttf" => "ttf",
+        "application/x-font-otf" | "font/otf" => "otf",
         _ => "",
     };
     if !by_ct.is_empty() {
@@ -115,12 +126,20 @@ impl Exp<'_> {
         } else {
             m.content_type.clone()
         };
-        let name = if ct.starts_with("image/") {
-            self.n_image += 1;
-            format!("ppt/media/image{}.{ext}", self.n_image)
-        } else {
-            self.n_media += 1;
-            format!("ppt/media/media{}.{ext}", self.n_media)
+        let name = loop {
+            let name = if ct.starts_with("image/") {
+                self.n_image += 1;
+                format!("ppt/media/image{}.{ext}", self.n_image)
+            } else if is_font(&ct) {
+                self.n_font += 1;
+                format!("ppt/fonts/font{}.{ext}", self.n_font)
+            } else {
+                self.n_media += 1;
+                format!("ppt/media/media{}.{ext}", self.n_media)
+            };
+            if !self.pkg.taken(&name) {
+                break name;
+            }
         };
         self.pkg.binary(&name, &ct, m.data.as_ref().clone());
         self.media_parts.insert(id, name.clone());
@@ -159,10 +178,62 @@ impl Exp<'_> {
         o.rels.add("image", &opc::relative(&o.name, &part), false)
     }
     pub fn chart_rel(&mut self, o: &mut Out, c: &deckcraft_model::Chart) -> String {
-        self.n_chart += 1;
-        let name = format!("ppt/charts/chart{}.xml", self.n_chart);
-        self.pkg.xml_part(&name, CT_CHART, chart::chart_xml(c));
+        let name = loop {
+            self.n_chart += 1;
+            let name = format!("ppt/charts/chart{}.xml", self.n_chart);
+            if !self.pkg.taken(&name) {
+                break name;
+            }
+        };
+        let mut co = Out::new(&name);
+        let xml = match chart::unchanged_raw(c) {
+            Some(raw) => {
+                let ids = self.links(&mut co, &c.links, 0);
+                chart::raw_chart_xml(raw, &ids)
+            }
+            None => {
+                // An edited chart no longer matches its embedded workbook: Edit Data would bring
+                // the old numbers back, so the workbook is left behind.
+                let kept: Vec<PartLink> = c.links.iter().filter(|l| !l.kind.ends_with("/package")).cloned().collect();
+                self.links(&mut co, &kept, 0);
+                chart::chart_xml(c)
+            }
+        };
+        self.pkg.xml_part(&name, CT_CHART, xml);
+        self.pkg.rels(&name, &co.rels);
         o.rels.add_new("chart", &opc::relative(&o.name, &name), false)
+    }
+    /// Write kept relationships of `o` under their original ids, with their parts (each part
+    /// once, under its original name when free). Returns the ids written.
+    pub fn links(&mut self, o: &mut Out, links: &[PartLink], depth: usize) -> Vec<String> {
+        let mut ids = vec![];
+        for l in links.iter().take(1000) {
+            let Some(m) = self.p.media(l.media) else { continue };
+            if m.data.is_empty() {
+                if let Some(url) = m.link.clone() {
+                    ids.push(o.rels.keep(&l.id, &l.kind, &url, true));
+                }
+                continue;
+            }
+            let part = match self.media_parts.get(&l.media) {
+                Some(part) => part.clone(),
+                None => {
+                    let wanted = if l.part.is_empty() { format!("ppt/{}", m.name) } else { l.part.clone() };
+                    let part = self.pkg.free_name(&wanted);
+                    let ct = if m.content_type.contains('/') { m.content_type.clone() } else { crate::mime_for(&part).to_string() };
+                    self.pkg.kept_part(&part, &ct, m.data.as_ref().clone());
+                    self.media_parts.insert(l.media, part.clone());
+                    if !l.links.is_empty() && depth < MAX_LINK_DEPTH {
+                        let mut lo = Out::new(&part);
+                        self.links(&mut lo, &l.links, depth + 1);
+                        self.pkg.rels(&part, &lo.rels);
+                    }
+                    part
+                }
+            };
+            ids.push(o.rels.keep(&l.id, &l.kind, &opc::relative(&o.name, &part), false));
+        }
+        ids
     }
 }
 
@@ -369,6 +440,7 @@ pub fn export(p: &Presentation) -> Result<Vec<u8>, PptxError> {
         media_parts: HashMap::new(),
         n_image: 0,
         n_media: 0,
+        n_font: 0,
         n_chart: 0,
         slide_parts: HashMap::new(),
         table_styles: vec![],
@@ -378,6 +450,8 @@ pub fn export(p: &Presentation) -> Result<Vec<u8>, PptxError> {
         x.slide_parts.insert(s.id, format!("ppt/slides/slide{}.xml", i + 1));
     }
     let mut pres = Out::new("ppt/presentation.xml");
+    // Kept relationships first, so they keep their ids.
+    x.links(&mut pres, &p.links, 0);
 
     // Masters, themes and layouts.
     let mut master_rids = vec![];
@@ -506,7 +580,9 @@ pub fn export(p: &Presentation) -> Result<Vec<u8>, PptxError> {
     // Document properties and package relationships.
     x.pkg.xml_part("docProps/core.xml", CT_CORE, core_xml(p));
     x.pkg.xml_part("docProps/app.xml", CT_APP, app_xml(p));
-    let mut root = RelsOut::default();
+    let mut root = Out::new("");
+    x.links(&mut root, &p.package_links, 0);
+    let mut root = root.rels;
     root.add("officeDocument", "ppt/presentation.xml", false);
     root.add(opc::RT_CORE, "docProps/core.xml", false);
     root.add("extended-properties", "docProps/app.xml", false);
@@ -658,7 +734,18 @@ fn presentation_xml(x: &mut Exp, o: &mut Out, masters: &[(u64, String)], notes: 
     let p = x.p;
     let mut w = W::new();
     let first = (p.first_slide_number != 1).then_some(p.first_slide_number.min(9999));
-    root_open(&mut w, "p:presentation", A::new().a("saveSubsetFonts", 1).o("firstSlideNum", first));
+    let fonts: Vec<(&deckcraft_model::EmbeddedFont, Vec<(&str, String)>)> = p
+        .embedded_fonts
+        .iter()
+        .filter_map(|f| {
+            let styles: Vec<(&str, String)> = [("p:regular", f.regular), ("p:bold", f.bold), ("p:italic", f.italic), ("p:boldItalic", f.bold_italic)]
+                .into_iter()
+                .filter_map(|(tag, m)| Some((tag, x.media_rel_new(o, m?, "font")?)))
+                .collect();
+            (!styles.is_empty() && !f.typeface.is_empty()).then_some((f, styles))
+        })
+        .collect();
+    root_open(&mut w, "p:presentation", A::new().t("embedTrueTypeFonts", !fonts.is_empty()).a("saveSubsetFonts", 1).o("firstSlideNum", first));
     w.open0("p:sldMasterIdLst");
     for (id, rid) in masters {
         w.empty("p:sldMasterId", A::new().a("id", id).a("r:id", rid));
@@ -679,6 +766,19 @@ fn presentation_xml(x: &mut Exp, o: &mut Out, masters: &[(u64, String)], notes: 
     let clamp = |v: f64| dml::emu(v).clamp(914_400, 51_206_400);
     w.empty("p:sldSz", A::new().a("cx", clamp(p.slide_size.width)).a("cy", clamp(p.slide_size.height)));
     w.empty("p:notesSz", A::new().a("cx", dml::emu_pos(p.notes_size.width).max(1)).a("cy", dml::emu_pos(p.notes_size.height).max(1)));
+    if !fonts.is_empty() {
+        w.open0("p:embeddedFontLst");
+        for (f, styles) in &fonts {
+            w.open0("p:embeddedFont");
+            let panose = f.panose.as_deref().filter(|v| v.len() == 20 && v.bytes().all(|b| b.is_ascii_hexdigit()));
+            w.empty("p:font", A::new().a("typeface", &f.typeface).o("panose", panose).o("pitchFamily", f.pitch_family).o("charset", f.charset));
+            for (tag, rid) in styles {
+                w.empty(tag, A::new().a("r:id", rid));
+            }
+            w.close("p:embeddedFont");
+        }
+        w.close("p:embeddedFontLst");
+    }
     if !p.custom_shows.is_empty() {
         w.open0("p:custShowLst");
         for (i, cs) in p.custom_shows.iter().enumerate() {

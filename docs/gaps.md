@@ -121,8 +121,9 @@ Detail in [file-format-parity.md](file-format-parity.md).
 - **Estimate:** 10–16 h (render the timeline frame by frame; an H.264 encoder is the hard part,
   FilmCraft has one to copy).
 
-### Embedded fonts aren't read or written
-- **Evidence:** no `p:embeddedFontLst` handling in `crates/pptx`.
+### Embedded fonts aren't used for layout
+- **Evidence:** `p:embeddedFontLst` and its `.fntdata` parts are kept through save
+  (`Presentation::embedded_fonts`), but the obfuscated font files aren't loaded into the font database.
 - **Impact:** decks that rely on embedded fonts reflow.
 - **Estimate:** 3–5 h.
 

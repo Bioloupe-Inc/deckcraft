@@ -330,8 +330,11 @@ fn frame(imp: &mut Imp, part: &Part, ctx: &mut IdCtx, e: &El, depth: usize) -> S
         if let Some(c) = gd.child("chart")
             && let Some(rel) = part.rels.get(c.attr("r:id").unwrap_or(""))
             && let Some(bytes) = imp.pkg.get(&rel.target)
-            && let Some(chart) = super::read_chart_xml(bytes)
+            && let Some(mut chart) = super::read_chart_xml(bytes)
         {
+            // The workbook, style and colour parts; the kept chart XML refers to them by id.
+            let rels = imp.pkg.rels(&rel.target);
+            chart.links = super::part_links(imp, &rels, &|_| true, 0);
             s.kind = ShapeKind::Chart(Box::new(chart));
             return s;
         }

@@ -362,27 +362,35 @@ fn plot_group(w: &mut W, c: &Chart, kind: ChartType, list: &[(usize, &Series)]) 
     w.close(tag);
 }
 
-/// The chart part XML.
-pub fn chart_xml(c: &Chart) -> Vec<u8> {
-    // Reuse the kept part when the chart is unchanged since it was read.
-    if let Some(raw) = &c.raw
-        && let Ok(doc) = crate::xml::parse(raw.as_bytes())
-        && doc.root.is("chartSpace")
-    {
-        let mut root = doc.root.clone();
-        crate::read::resolve_mc(&mut root, 0);
-        if let Some(back) = crate::read::chart_from_el(&root) {
-            let mut me = c.clone();
-            me.raw = None;
-            if back == me {
-                let mut keep = doc.root;
-                keep.remove_all(&["externalData", "userShapes"]);
-                let mut w = W::new();
-                w.raw(&keep.to_xml());
-                return w.finish();
-            }
-        }
+/// The kept chart part, when the chart is unchanged since it was read.
+pub fn unchanged_raw(c: &Chart) -> Option<crate::xml::El> {
+    let doc = crate::xml::parse(c.raw.as_ref()?.as_bytes()).ok()?;
+    if !doc.root.is("chartSpace") {
+        return None;
     }
+    let mut root = doc.root.clone();
+    crate::read::resolve_mc(&mut root, 0);
+    let back = crate::read::chart_from_el(&root)?;
+    let mut me = c.clone();
+    me.raw = None;
+    me.links = vec![];
+    (back == me).then_some(doc.root)
+}
+
+/// The kept chart part XML; `rel_ids` are the relationships written for it, which its workbook
+/// (`c:externalData`) and drawing (`c:userShapes`) references must name.
+pub fn raw_chart_xml(mut root: crate::xml::El, rel_ids: &[String]) -> Vec<u8> {
+    root.children.retain(|n| match n {
+        crate::xml::Node::El(e) if e.is("externalData") || e.is("userShapes") => e.attr("r:id").is_some_and(|id| rel_ids.iter().any(|r| r == id)),
+        _ => true,
+    });
+    let mut w = W::new();
+    w.raw(&root.to_xml());
+    w.finish()
+}
+
+/// The chart part XML, built from the model.
+pub fn chart_xml(c: &Chart) -> Vec<u8> {
     let mut w = W::new();
     w.open("c:chartSpace", A::new().a("xmlns:c", NS_C).a("xmlns:a", NS_A).a("xmlns:r", NS_R));
     w.val("c:date1904", 0);

@@ -162,6 +162,10 @@ pub struct Chart {
     /// Original chart XML part kept for round-trip of unmodelled options.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub raw: Option<String>,
+    /// The chart part's relationships DeckCraft doesn't model: its embedded workbook, chart
+    /// style and colour parts.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub links: Vec<crate::PartLink>,
 }
 
 impl Default for Chart {
@@ -187,6 +191,7 @@ impl Default for Chart {
             y_min: None,
             y_max: None,
             raw: None,
+            links: vec![],
         }
     }
 }
