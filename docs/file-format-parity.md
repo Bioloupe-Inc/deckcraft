@@ -37,7 +37,7 @@ PowerPoint opens and saves; Viewer = opens only).
 | Kind | PowerPoint | DeckCraft | Notes |
 |---|---|---|---|
 | PNG, JPEG, GIF (animated), BMP, TIFF, WebP | yes | yes | `image` 0.25; animated GIFs play since #39 |
-| SVG | yes (with PNG fallback) | **no** | The PNG fallback shows; SVG files can't be inserted |
+| SVG | yes (with PNG fallback) | kept, not rendered | Read, inserted and saved with or without a PNG fallback (`asvg:svgBlip`); the PNG fallback shows, SVG-only pictures (Office icons) draw blank |
 | EMF / WMF | yes | **no** | Common in decks made on Windows: blank picture |
 | HEIC | yes (macOS) | no | |
 | Audio: MP3, AAC/M4A, ALAC, WAV, AIFF, CAF, FLAC, Ogg Vorbis, Opus | yes (Ogg/Opus partly) | yes | Pure-Rust decoders in `crates/media`, `crates/opus` |

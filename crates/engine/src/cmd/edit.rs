@@ -51,7 +51,7 @@ fn slides_scope(s: &Session, p: &Value) -> bool {
 fn media_of_shapes(shapes: &[Shape], out: &mut Vec<MediaId>) {
     deckcraft_model::walk(shapes, &mut |s, _| {
         match &s.kind {
-            deckcraft_model::ShapeKind::Picture { fill } => out.push(fill.media),
+            deckcraft_model::ShapeKind::Picture { fill } => out.extend([Some(fill.media), fill.svg].into_iter().flatten()),
             deckcraft_model::ShapeKind::Media(m) => {
                 out.push(m.media);
                 if let Some(p) = m.poster {
@@ -61,7 +61,7 @@ fn media_of_shapes(shapes: &[Shape], out: &mut Vec<MediaId>) {
             _ => {}
         }
         if let Some(deckcraft_model::Fill::Picture(pf)) = &s.fill {
-            out.push(pf.media);
+            out.extend([Some(pf.media), pf.svg].into_iter().flatten());
         }
     });
 }

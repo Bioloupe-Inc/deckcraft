@@ -79,8 +79,8 @@ Detail in [file-format-parity.md](file-format-parity.md).
 - **Evidence:** `crates/render/src/images.rs` decodes through `image` 0.25 (PNG, JPEG, WebP, GIF,
   TIFF, BMP); nothing reads EMF, WMF or SVG. Decks from Windows often hold EMF (pasted charts,
   Visio, logos); PowerPoint's Insert Icons stores SVG with a PNG fallback.
-- **Impact:** blank pictures in real decks; SVG icons show only their raster fallback, and SVG files
-  can't be inserted.
+- **Impact:** blank pictures in real decks; SVG icons show only their raster fallback, and SVG-only
+  icons draw blank (they are kept on save).
 - **Estimate:** 8–14 h (an SVG renderer through `resvg`-style crates, an EMF/WMF record player for
   the common records). **Beta blocker** for EMF.
 
