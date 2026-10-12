@@ -23,6 +23,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 pub use cmd::{CommandInfo, CommandSpec, command_specs, find_command};
+/// The font database. On the web (wasm32) no font folders are read and only Inter and BIZ
+/// UDPGothic are built in: add a deck's fonts at runtime with
+/// `fonts::FontDb::global().add_font(bytes)` before rendering.
+pub use deckcraft_fonts as fonts;
 pub use deckcraft_geom as geom;
 pub use deckcraft_media as media;
 pub use deckcraft_model as model;
