@@ -123,7 +123,12 @@ impl Default for PictureMode {
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct PictureFill {
+    /// The picture's image. An SVG-only picture (Office icons) holds the SVG here.
     pub media: MediaId,
+    /// The vector original of a raster `media`: Office stores an SVG picture as the SVG plus a
+    /// PNG rendition for readers without SVG support.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub svg: Option<MediaId>,
     /// Source crop as fractions of the image (left, top, right, bottom); negative values pad.
     pub crop: [f64; 4],
     pub mode: PictureMode,

@@ -7,6 +7,7 @@ use deckcraft_model::text::{
 };
 
 use super::{Exp, Out};
+use crate::opc::{NS_ASVG, SVG_EXT_URI};
 use crate::xml::{A, W};
 
 pub fn emu(pt: f64) -> i64 {
@@ -126,14 +127,32 @@ pub fn fill(w: &mut W, x: &mut Exp, o: &mut Out, f: &Fill) {
     }
 }
 
+/// An SVG image (some writers declare `image/svg` rather than `image/svg+xml`).
+fn is_svg(m: &deckcraft_model::MediaItem) -> bool {
+    m.content_type.to_ascii_lowercase().starts_with("image/svg") || m.name.to_ascii_lowercase().ends_with(".svg")
+}
+
 /// `a:blipFill` / `p:blipFill`.
 pub fn blip_fill(w: &mut W, x: &mut Exp, o: &mut Out, tag: &str, pf: &PictureFill) {
-    let rid = x.media_rel(o, pf.media, "image").unwrap_or_else(|| x.placeholder_rel(o));
+    // The blip is a raster image; an SVG goes in the Office 2016 `svgBlip` extension, beside the
+    // raster rendition when there is one (an SVG-only blip has no `r:embed`, as Office writes it).
+    let (raster, vector) = if x.p.media(pf.media).is_some_and(is_svg) { (None, Some(pf.media)) } else { (Some(pf.media), pf.svg) };
+    let svg_rid = vector.and_then(|m| x.media_rel(o, m, "image"));
+    let rid = match raster.and_then(|m| x.media_rel(o, m, "image")) {
+        Some(r) => Some(r),
+        None if svg_rid.is_some() => None,
+        None => Some(x.placeholder_rel(o)),
+    };
     w.open(tag, A::new().a("rotWithShape", "1"));
     let adj = &pf.adjust;
-    let has_kids =
-        pf.alpha.is_some() || adj.brightness != 0.0 || adj.contrast != 0.0 || adj.grayscale || adj.duotone.is_some() || adj.clear_color.is_some();
-    let a = A::new().a("r:embed", &rid);
+    let has_kids = pf.alpha.is_some()
+        || adj.brightness != 0.0
+        || adj.contrast != 0.0
+        || adj.grayscale
+        || adj.duotone.is_some()
+        || adj.clear_color.is_some()
+        || svg_rid.is_some();
+    let a = A::new().o("r:embed", rid.as_deref());
     if has_kids {
         w.open("a:blip", a);
         if let Some(c) = adj.clear_color {
@@ -160,6 +179,13 @@ pub fn blip_fill(w: &mut W, x: &mut Exp, o: &mut Out, tag: &str, pf: &PictureFil
         }
         if adj.brightness != 0.0 || adj.contrast != 0.0 {
             w.empty("a:lum", A::new().a("bright", pct(adj.brightness.clamp(-1.0, 1.0))).a("contrast", pct(adj.contrast.clamp(-1.0, 1.0))));
+        }
+        if let Some(r) = &svg_rid {
+            w.open0("a:extLst");
+            w.open("a:ext", A::new().a("uri", SVG_EXT_URI));
+            w.empty("asvg:svgBlip", A::new().a("xmlns:asvg", NS_ASVG).a("r:embed", r));
+            w.close("a:ext");
+            w.close("a:extLst");
         }
         w.close("a:blip");
     } else {

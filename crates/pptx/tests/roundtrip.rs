@@ -230,6 +230,7 @@ pub fn rich_deck() -> Presentation {
             mode: PictureMode::Stretch { fill_rect: [0.0; 4] },
             alpha: Some(0.5),
             adjust: PictureAdjust { brightness: 0.2, contrast: -0.1, grayscale: true, ..Default::default() },
+            svg: None,
         },
     };
     let mut tiled = shape(&mut p, "Tiled", 350.0, 120.0, 200.0, 150.0);

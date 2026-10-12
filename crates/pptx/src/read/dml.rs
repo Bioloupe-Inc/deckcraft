@@ -116,9 +116,15 @@ pub fn gradient(f: &El) -> Gradient {
 /// `blipFill` (either `a:` or `p:`) → picture fill, registering the image as media.
 pub fn blip_fill(imp: &mut Imp, part: &Part, bf: &El) -> Option<PictureFill> {
     let blip = bf.child("blip");
-    let media = blip.and_then(|b| media_ref(imp, part, b));
-    let media = media?;
-    let mut pf = PictureFill { media, ..Default::default() };
+    let raster = blip.and_then(|b| media_ref(imp, part, b));
+    // Office 2016+ SVG pictures: `a:extLst/a:ext/asvg:svgBlip`, with or without a raster blip.
+    let svg = blip.and_then(|b| b.find("svgBlip")).and_then(|s| media_ref(imp, part, s));
+    let (media, svg) = match (raster, svg) {
+        (Some(m), svg) => (m, svg),
+        (None, Some(s)) => (s, None),
+        (None, None) => return None,
+    };
+    let mut pf = PictureFill { media, svg, ..Default::default() };
     if let Some(b) = blip {
         for e in b.elements() {
             match e.local() {

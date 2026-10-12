@@ -67,7 +67,7 @@ fn ext_for(content_type: &str, name: &str, data: &[u8]) -> String {
         "image/gif" => "gif",
         "image/bmp" => "bmp",
         "image/tiff" => "tiff",
-        "image/svg+xml" => "svg",
+        "image/svg+xml" | "image/svg" => "svg",
         "image/x-emf" | "image/emf" => "emf",
         "image/x-wmf" | "image/wmf" => "wmf",
         "image/webp" => "webp",
