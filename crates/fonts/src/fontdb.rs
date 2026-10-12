@@ -597,8 +597,10 @@ impl FontDb {
         v.into_iter().map(|t| t.2).collect()
     }
 
-    /// Add a user font (TTF/OTF/TTC bytes). Returns the number of faces added (0 if unparseable or
-    /// every face was already present).
+    /// Add a font at runtime from its bytes (TTF/OTF/TTC; no file system needed, so this is how
+    /// the web build gets fonts beyond the few it embeds). Its faces are then found by family
+    /// name like bundled ones, from the next layout on. Returns the number of faces added (0 if
+    /// unparseable or every face was already present).
     pub fn add_font(&self, bytes: Vec<u8>) -> usize {
         let data = Arc::new(bytes);
         let mut added = 0;

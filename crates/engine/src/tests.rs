@@ -543,3 +543,17 @@ fn inserted_hyperlinks_look_like_links() {
     s.execute("format.underline", &json!({})).unwrap();
     assert_eq!(s.execute("format.state", &json!({})).unwrap()["underline"], false);
 }
+
+/// The web build reads no font folders: a host adds font bytes at runtime and lookups find them.
+#[test]
+fn fonts_added_at_runtime_are_found() {
+    let db = crate::fonts::FontDb::with_font_dirs(vec![]);
+    let bytes = epaint_default_fonts::HACK_REGULAR.to_vec();
+    let before = db.has_family("Hack");
+    let added = db.add_font(bytes);
+    assert!(before || added == 1, "added {added} faces");
+    assert!(db.has_family("Hack"));
+    let face = db.face("Hack", "Regular");
+    assert_eq!((face.family.as_str(), face.style.as_str()), ("Hack", "Regular"));
+    assert!(face.covers('a'));
+}
