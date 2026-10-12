@@ -193,8 +193,8 @@ fn svg_only_picture_is_kept() {
     }
 }
 
-fn svg_only_picture(content_type: &str) {
-    // PowerPoint's icons: a blip with only the SVG extension, no raster `r:embed`.
+/// A deck whose picture (100, 100, 50 × 50 pt) is an SVG-only blip, as PowerPoint stores icons.
+fn svg_only_deck(content_type: &str) -> Pkg {
     let mut pkg = picture_deck();
     let slide = "ppt/slides/slide1.xml";
     let blip = first_blip(&pkg.text(slide));
@@ -204,6 +204,23 @@ fn svg_only_picture(content_type: &str) {
     pkg.add_rel(slide, "rId90", "http://schemas.openxmlformats.org/officeDocument/2006/relationships/image", "../media/icon1.svg");
     pkg.add_part("ppt/media/icon1.svg", content_type, SVG);
     pkg.remove(&png_part);
+    pkg
+}
+
+#[test]
+fn svg_only_picture_renders() {
+    let p = deckcraft_pptx::import(&svg_only_deck("image/svg+xml").bytes()).expect("import");
+    let img = deckcraft_engine::render::render_slide(&p, 0, &deckcraft_engine::render::RenderOpts { scale: 2.0, ..Default::default() });
+    // The SVG is one #3366cc square filling the picture's box.
+    for (x, y) in [(210, 210), (250, 250), (290, 290)] {
+        let [r, g, b, a] = img.pixel(x, y);
+        assert!(r.abs_diff(0x33) < 8 && g.abs_diff(0x66) < 8 && b.abs_diff(0xcc) < 8 && a > 250, "({x}, {y}) is {:?}", [r, g, b, a]);
+    }
+}
+
+fn svg_only_picture(content_type: &str) {
+    // PowerPoint's icons: a blip with only the SVG extension, no raster `r:embed`.
+    let pkg = svg_only_deck(content_type);
 
     let p = deckcraft_pptx::import(&pkg.bytes()).expect("import");
     let fill = picture(&p);

@@ -95,6 +95,36 @@ pub fn decode(bytes: &[u8]) -> Option<image::RgbaImage> {
     Some(img.to_rgba8())
 }
 
+/// Longest side an SVG picture is drawn at.
+const SVG_MAX_SIDE: u32 = 4096;
+
+/// Draw SVG bytes to straight RGBA with the longer side `side` px (at most 4096); `None` for
+/// bytes that aren't a readable SVG. Text in the SVG isn't drawn (no fonts are given to it).
+pub fn rasterize_svg(bytes: &[u8], side: u32) -> Option<image::RgbaImage> {
+    use resvg::{tiny_skia, usvg};
+    if bytes.len() > 64 << 20 || !bytes.windows(4).take(4096).any(|w| w == b"<svg") {
+        return None;
+    }
+    let tree = usvg::Tree::from_data(bytes, &usvg::Options::default()).ok()?;
+    let (w, h) = (tree.size().width(), tree.size().height());
+    if !(w.is_finite() && h.is_finite() && w > 0.0 && h > 0.0) {
+        return None;
+    }
+    let k = side.clamp(1, SVG_MAX_SIDE) as f32 / w.max(h);
+    let (pw, ph) = (((w * k).round() as u32).max(1), ((h * k).round() as u32).max(1));
+    let mut pm = tiny_skia::Pixmap::new(pw, ph)?;
+    resvg::render(&tree, tiny_skia::Transform::from_scale(pw as f32 / w, ph as f32 / h), &mut pm.as_mut());
+    let data: Vec<u8> = pm
+        .pixels()
+        .iter()
+        .flat_map(|p| {
+            let c = p.demultiply();
+            [c.red(), c.green(), c.blue(), c.alpha()]
+        })
+        .collect();
+    image::RgbaImage::from_raw(pw, ph, data)
+}
+
 /// A premultiplied pixmap of the picture, downsampled so its longer side is near `want` px.
 pub fn decode_for(bytes: &Arc<Vec<u8>>, want: f64, adj: &PictureAdjust) -> Option<Arc<Pixmap>> {
     let addr = Arc::as_ptr(bytes) as usize;
@@ -114,13 +144,14 @@ pub fn decode_for(bytes: &Arc<Vec<u8>>, want: f64, adj: &PictureAdjust) -> Optio
     }) {
         return Some(pm);
     }
-    let Some(mut img) = decode(bytes) else {
+    let target = 1u32 << bucket;
+    // An SVG is drawn at the size it will show, a raster image decoded then downsampled.
+    let Some(mut img) = rasterize_svg(bytes, target).or_else(|| decode(bytes)) else {
         with(|c| {
             c.bad.insert(addr, bytes.clone());
         });
         return None;
     };
-    let target = 1u32 << bucket;
     let (w, h) = img.dimensions();
     if w.max(h) > target.max(16) && w.max(h) > 4096.min(target * 2) {
         let k = target as f64 / w.max(h) as f64;

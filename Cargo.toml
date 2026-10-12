@@ -57,6 +57,8 @@ vello_cpu = "0.2"
 vello_common = { version = "0.2", default-features = false }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "gif", "tiff", "bmp"] }
 krilla = { version = "0.8", features = ["pdf"] }
+# SVG pictures (no text, system fonts or embedded raster images: icons don't need them).
+resvg = { version = "0.48", default-features = false }
 i_overlay = "9"
 quick-xml = "0.38"
 zip = { version = "3", default-features = false, features = ["deflate"] }

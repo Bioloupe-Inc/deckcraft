@@ -20,7 +20,7 @@ revision history.
 | 1 | PPTX never tested against a corpus of real decks | File format | B | 20–35 | [file-format-parity.md](file-format-parity.md) |
 | 2 | Data loss and crashes on common paths (#60, #40, #59) | Stability | B | 6–12 | this file |
 | 3 | PPTX round trip drops comment threads, media options, rewind (#70, #74, #77) | File format | B | 3–6 | [file-format-parity.md](file-format-parity.md) |
-| 4 | EMF/WMF and SVG pictures don't render | File format | B | 8–14 | [file-format-parity.md](file-format-parity.md) |
+| 4 | EMF/WMF pictures don't render | File format | B | 6–10 | [file-format-parity.md](file-format-parity.md) |
 | 5 | No localization: English only | Localization | B (infra + 5 languages) | 55–90 | [localization-parity.md](localization-parity.md) |
 | 6 | No printing | Feature | B | 5–8 | [file-format-parity.md](file-format-parity.md) |
 | 7 | Fonts: only Regular, Bold and Italic faces (#69) | Feature | B | 3–5 | [ui-parity.md](ui-parity.md) |
@@ -75,14 +75,12 @@ Detail in [file-format-parity.md](file-format-parity.md).
 - **Impact:** a deck opened and saved silently loses review state and show behaviour.
 - **Estimate:** 3–6 h. **Beta blocker.**
 
-### EMF/WMF and SVG pictures don't render
+### EMF/WMF pictures don't render
 - **Evidence:** `crates/render/src/images.rs` decodes through `image` 0.25 (PNG, JPEG, WebP, GIF,
-  TIFF, BMP); nothing reads EMF, WMF or SVG. Decks from Windows often hold EMF (pasted charts,
-  Visio, logos); PowerPoint's Insert Icons stores SVG with a PNG fallback.
-- **Impact:** blank pictures in real decks; SVG icons show only their raster fallback, and SVG-only
-  icons draw blank (they are kept on save).
-- **Estimate:** 8–14 h (an SVG renderer through `resvg`-style crates, an EMF/WMF record player for
-  the common records). **Beta blocker** for EMF.
+  TIFF, BMP) and draws SVG through `resvg`; nothing reads EMF or WMF. Decks from Windows often hold
+  EMF (pasted charts, Visio, logos).
+- **Impact:** blank pictures in real decks.
+- **Estimate:** 6–10 h (an EMF/WMF record player for the common records). **Beta blocker.**
 
 ### Template, slide-show and macro variants are saved as plain `.pptx`
 - **Evidence:** `crates/pptx/src/write/mod.rs` always writes the
