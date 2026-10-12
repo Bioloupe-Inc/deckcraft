@@ -732,6 +732,8 @@ fn section_slides(p: &Presentation) -> Vec<(String, Vec<usize>)> {
 
 fn presentation_xml(x: &mut Exp, o: &mut Out, masters: &[(u64, String)], notes: Option<&str>, slides: &[String]) -> Vec<u8> {
     let p = x.p;
+    let file_ids = p.file_slide_ids();
+    let file_id = |i: usize| file_ids.get(i).copied().unwrap_or(256);
     let mut w = W::new();
     let first = (p.first_slide_number != 1).then_some(p.first_slide_number.min(9999));
     let fonts: Vec<(&deckcraft_model::EmbeddedFont, Vec<(&str, String)>)> = p
@@ -759,7 +761,7 @@ fn presentation_xml(x: &mut Exp, o: &mut Out, masters: &[(u64, String)], notes: 
     if !slides.is_empty() {
         w.open0("p:sldIdLst");
         for (i, rid) in slides.iter().enumerate() {
-            w.empty("p:sldId", A::new().a("id", 256 + i).a("r:id", rid));
+            w.empty("p:sldId", A::new().a("id", file_id(i)).a("r:id", rid));
         }
         w.close("p:sldIdLst");
     }
@@ -808,7 +810,7 @@ fn presentation_xml(x: &mut Exp, o: &mut Out, masters: &[(u64, String)], notes: 
                 inner.open("p14:section", A::new().a("name", name).a("id", crate::tables::guid(&format!("section:{i}:{name}"))));
                 inner.open0("p14:sldIdLst");
                 for si in list {
-                    inner.empty("p14:sldId", A::new().a("id", 256 + si));
+                    inner.empty("p14:sldId", A::new().a("id", file_id(*si)));
                 }
                 inner.close("p14:sldIdLst");
                 inner.close("p14:section");

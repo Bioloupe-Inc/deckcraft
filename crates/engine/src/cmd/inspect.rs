@@ -9,8 +9,8 @@ use crate::{Result, Session};
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
-        cmd!(query "document.inspect", "Inspect Presentation", [], None, "{} → slides with titles, layouts, shape counts; selection; size; theme", has_doc, document),
-        cmd!(query "slide.inspect", "Inspect Slide", [], None, "{index?} → the slide's shapes with ids, kinds, boxes, text, fills, animations, transition, notes", has_doc, slide),
+        cmd!(query "document.inspect", "Inspect Presentation", [], None, "{} → slides with ids (fileId: the PowerPoint slide id saved), titles, layouts, shape counts; selection; size; theme", has_doc, document),
+        cmd!(query "slide.inspect", "Inspect Slide", [], None, "{index?} → the slide's id and fileId (PowerPoint slide id), shapes with ids, kinds, boxes, text, fills, animations, transition, notes", has_doc, slide),
         cmd!(query "shape.inspect", "Inspect Shape", [], None, "{id} → full shape JSON plus its effective box", has_doc, shape),
         cmd!(query "commands.list", "List Commands", [], None, "{filter?: substring} → [{id, label, params, enabled}]", always, commands),
     ]
@@ -19,13 +19,14 @@ pub fn specs() -> Vec<CommandSpec> {
 fn document(s: &mut Session, _p: &Value) -> Result<Value> {
     let st = s.doc()?;
     let d = &st.doc;
+    let file_ids = d.file_slide_ids();
     let slides: Vec<Value> = d
         .slides
         .iter()
         .enumerate()
         .map(|(i, sl)| {
             let layout = d.layout(sl.layout).map(|(_, l)| l.name.clone()).unwrap_or_default();
-            json!({"index": i, "id": sl.id, "title": sl.title(), "layout": layout, "shapes": sl.shapes.len(), "hidden": sl.hidden, "transition": sl.transition.as_ref().map(|t| t.kind.clone()), "animations": sl.animations.len(), "notes": sl.notes_text()})
+            json!({"index": i, "id": sl.id, "fileId": file_ids.get(i), "title": sl.title(), "layout": layout, "shapes": sl.shapes.len(), "hidden": sl.hidden, "transition": sl.transition.as_ref().map(|t| t.kind.clone()), "animations": sl.animations.len(), "notes": sl.notes_text()})
         })
         .collect();
     let m = d.masters.first();
@@ -122,6 +123,7 @@ fn slide(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({
         "index": i,
         "id": sl.id,
+        "fileId": st.doc.file_slide_ids().get(i),
         "layout": st.doc.layout(sl.layout).map(|(_, l)| l.name.clone()),
         "title": sl.title(),
         "background": bg,

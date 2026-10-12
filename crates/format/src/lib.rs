@@ -136,6 +136,7 @@ pub fn repair(p: &mut Presentation) {
                 }
                 if let Some(id) = new_id {
                     s.id = id;
+                    s.file_id = None;
                 }
             }
         }

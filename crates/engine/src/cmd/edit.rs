@@ -179,6 +179,7 @@ fn paste(s: &mut Session, p: &Value) -> Result<Value> {
             for (k, sl) in clip.slides.iter().enumerate() {
                 let mut sl = sl.clone();
                 sl.id = SlideId(doc.alloc_id());
+                sl.file_id = Some(doc.next_file_slide_id());
                 reid(doc, &mut sl.shapes);
                 if doc.layout(sl.layout).is_none() {
                     sl.layout = doc.masters.first().and_then(|m| m.layouts.first()).map(|l| l.id).unwrap_or_default();
