@@ -62,6 +62,8 @@ pub fn open_presentation(name: &str, bytes: &[u8]) -> Result<Presentation> {
     if deckcraft_pptx::sniff(bytes) {
         let mut p = deckcraft_pptx::import(bytes).map_err(|e| EngineError::Other(e.to_string()))?;
         deckcraft_format::repair(&mut p);
+        // The deck draws in its own fonts.
+        crate::deck_fonts::register_embedded(&p);
         return Ok(p);
     }
     let lower = name.to_ascii_lowercase();
