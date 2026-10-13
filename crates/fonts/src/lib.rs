@@ -138,6 +138,7 @@ mod tests {
         FontDb::global().face(DEFAULT_FAMILY, "Regular")
     }
 
+    #[cfg(feature = "last-resort-font")]
     #[test]
     fn last_resort_face_parses() {
         let f = fontdb::last_resort_face();
@@ -145,6 +146,7 @@ mod tests {
         assert!(f.upem > 0.0);
     }
 
+    #[cfg(feature = "last-resort-font")]
     #[test]
     fn some_face_always_resolves() {
         let db = FontDb::with_font_dirs(Vec::new());

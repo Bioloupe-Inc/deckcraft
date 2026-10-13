@@ -15,4 +15,10 @@ harfrust = { workspace = true }
 unicode-bidi = { workspace = true }
 log = { workspace = true }
 # Last-resort face only (Ubuntu Light); no UI code.
-epaint_default_fonts = "0.36"
+epaint_default_fonts = { version = "0.36", optional = true }
+
+[features]
+default = ["last-resort-font"]
+# A compiled-in last-resort face (Ubuntu Light), so text always has a face to lay out in. A host
+# that always adds its own fonts first (the web) can leave it out.
+last-resort-font = ["dep:epaint_default_fonts"]

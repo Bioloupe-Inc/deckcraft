@@ -20,9 +20,11 @@ pub const FALLBACK_FAMILY: &str = "Inter";
 pub const LAST_RESORT_FAMILY: &str = "Ubuntu";
 
 /// Compiled-in font files: the craft-fonts faces (Latin presentation fonts, then Japanese;
-/// empty without `CRAFT_FONTS_DIR`), then the last-resort face.
+/// empty without `CRAFT_FONTS_DIR`), then the last-resort face (with `last-resort-font`).
 pub fn bundled() -> Vec<&'static [u8]> {
+    #[allow(unused_mut)]
     let mut v: Vec<&'static [u8]> = crate::CRAFT_FONTS.iter().map(|f| f.bytes).collect();
+    #[cfg(feature = "last-resort-font")]
     v.push(epaint_default_fonts::UBUNTU_LIGHT);
     v
 }
@@ -423,6 +425,7 @@ fn enumerate_faces(data: &[u8]) -> Vec<Found> {
 }
 
 /// The compiled-in last-resort face, for a database that somehow has no usable faces at all.
+#[cfg(feature = "last-resort-font")]
 pub(crate) fn last_resort_face() -> Arc<FontFace> {
     static FACE: std::sync::OnceLock<Arc<FontFace>> = std::sync::OnceLock::new();
     FACE.get_or_init(|| {
@@ -434,6 +437,16 @@ pub(crate) fn last_resort_face() -> Arc<FontFace> {
         Arc::new(face)
     })
     .clone()
+}
+
+/// Built without `last-resort-font` there is no compiled-in face: the host adds its fonts
+/// ([`FontDb::add_font`]) before laying out any text.
+#[cfg(not(feature = "last-resort-font"))]
+pub(crate) fn last_resort_face() -> Arc<FontFace> {
+    #[allow(clippy::panic)]
+    {
+        panic!("the font database has no faces: add a font before laying out text, or build deckcraft-fonts with `last-resort-font`")
+    }
 }
 
 fn make_face(bytes: FontBytes, index: u32, family: String, style: String, coords: Vec<([u8; 4], f32)>) -> Option<FontFace> {
