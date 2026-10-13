@@ -29,6 +29,7 @@ pub use cmd::{CommandInfo, CommandSpec, command_specs, find_command};
 /// `fonts::FontDb::global().add_font(bytes)` before rendering.
 pub use deckcraft_fonts as fonts;
 pub use deckcraft_geom as geom;
+#[cfg(feature = "media")]
 pub use deckcraft_media as media;
 pub use deckcraft_model as model;
 pub use deckcraft_render as render;
