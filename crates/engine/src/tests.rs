@@ -557,3 +557,26 @@ fn fonts_added_at_runtime_are_found() {
     assert_eq!((face.family.as_str(), face.style.as_str()), ("Hack", "Regular"));
     assert!(face.covers('a'));
 }
+
+#[test]
+fn typed_characters_are_one_undo_step() {
+    let mut s = session();
+    let r = s.execute("shape.insert", &json!({"preset": "rect", "rect": [100, 100, 200, 100], "text": "Hi"})).unwrap();
+    let id = r["id"].as_u64().unwrap();
+    s.execute("text.edit", &json!({"id": id})).unwrap();
+    let steps = s.doc().unwrap().history.undo.len();
+    for c in [" ", "t", "h", "e", "r", "e"] {
+        s.execute("text.insert", &json!({"text": c})).unwrap();
+    }
+    assert_eq!(s.doc().unwrap().history.undo.len(), steps + 1);
+    // Moving the caret ends the step: the next characters are another.
+    s.execute("text.move", &json!({"to": "start"})).unwrap();
+    s.execute("text.insert", &json!({"text": ">"})).unwrap();
+    s.execute("text.insert", &json!({"text": " "})).unwrap();
+    assert_eq!(s.doc().unwrap().history.undo.len(), steps + 2);
+    assert_eq!(s.execute("text.get", &json!({"id": id})).unwrap()["text"], "> Hi there");
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert_eq!(s.execute("text.get", &json!({"id": id})).unwrap()["text"], "Hi there");
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert_eq!(s.execute("text.get", &json!({"id": id})).unwrap()["text"], "Hi");
+}

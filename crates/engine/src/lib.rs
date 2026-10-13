@@ -9,6 +9,7 @@
 
 pub mod cmd;
 pub mod connect;
+pub mod deck_fonts;
 pub mod guard;
 pub mod keys;
 pub mod links;
@@ -123,6 +124,9 @@ pub struct HistoryEntry {
 pub struct History {
     pub undo: Vec<HistoryEntry>,
     pub redo: Vec<HistoryEntry>,
+    /// The shape whose text the latest undo step is typing into: further `text.insert`s join that
+    /// step, as typing does in PowerPoint, until any other command runs.
+    pub typing: Option<ShapeId>,
     pub limit: usize,
 }
 
@@ -419,12 +423,15 @@ impl Session {
         }
         if let (Some((uid, old, sel)), Some(st)) = (before, self.active_mut())
             && st.uid == uid
-            && !Arc::ptr_eq(&old, &st.doc)
-            && st.interaction.is_none()
-            && spec.undoable
             && outer
         {
-            push_undo(st, HistoryEntry { label: spec.label.to_string(), doc: old, selection: sel });
+            // Characters typed one command at a time into the same text are one undo step.
+            let typed = (id == "text.insert").then(|| st.selection.text.as_ref().map(|t| t.shape)).flatten();
+            let joins = typed.is_some() && st.history.typing == typed && st.history.undo.last().is_some_and(|e| e.label == spec.label);
+            if !Arc::ptr_eq(&old, &st.doc) && st.interaction.is_none() && spec.undoable && !joins {
+                push_undo(st, HistoryEntry { label: spec.label.to_string(), doc: old, selection: sel });
+            }
+            st.history.typing = typed;
         }
         if spec.journal && outer {
             self.journal.push((id.to_string(), params.clone()));
