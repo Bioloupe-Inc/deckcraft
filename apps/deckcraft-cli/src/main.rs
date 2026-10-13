@@ -4,7 +4,7 @@
 //! deckcraft-cli info FILE                       # slides, titles, layouts (JSON)
 //! deckcraft-cli render (FILE | --sample) [--slide N | --all] [--scale S] OUT.png|OUT_DIR
 //! deckcraft-cli convert IN OUT                  # .deckcraft ⇄ .pptx, outline .txt, .png (first slide)
-//! deckcraft-cli run [--in FILE | --sample] [--cmd ID[=JSON]]... [--save OUT] [--export OUT] [--print]
+//! deckcraft-cli run [--in FILE | --sample] [--cmd ID[=JSON]]... [--script FILE.jsonl] [--save OUT] [--export OUT] [--print]
 //! deckcraft-cli commands [FILTER]               # list commands (JSON)
 //! deckcraft-cli describe ID                     # one command
 //! deckcraft-cli app [--port PORT] COMMAND [JSON] | --method METHOD [JSON]   # drive the running app
@@ -35,7 +35,7 @@ macro_rules! outln {
 const USAGE: &str = "usage: deckcraft-cli info FILE
        deckcraft-cli render (FILE | --sample) [--slide N | --all] [--scale S] [--edit] OUT
        deckcraft-cli convert IN OUT
-       deckcraft-cli run [--in FILE | --sample] [--cmd ID[=JSON]]... [--save OUT] [--export OUT] [--print]
+       deckcraft-cli run [--in FILE | --sample] [--cmd ID[=JSON]]... [--script FILE.jsonl] [--save OUT] [--export OUT] [--print]
        deckcraft-cli commands [FILTER]
        deckcraft-cli describe COMMAND
        deckcraft-cli app [--port PORT] COMMAND [JSON] | --method METHOD [JSON]
@@ -188,7 +188,14 @@ fn run(args: &[String]) -> Result<(), String> {
         match a.as_str() {
             "--in" => input = Some(it.next().cloned().ok_or("--in needs a file")?),
             "--sample" => sample = true,
-            "--cmd" => cmds.push(it.next().cloned().ok_or("--cmd needs ID[=JSON]")?),
+            "--cmd" => {
+                let c = it.next().ok_or("--cmd needs ID[=JSON]")?;
+                cmds.push(match c.split_once('=') {
+                    Some((id, j)) => (id.to_string(), serde_json::from_str::<Value>(j).map_err(|e| format!("{id}: bad JSON: {e}"))?),
+                    None => (c.clone(), json!({})),
+                });
+            }
+            "--script" => cmds.extend(script_steps(it.next().ok_or("--script needs a file")?)?),
             "--save" => save = Some(it.next().cloned().ok_or("--save needs a path")?),
             "--export" => export = Some(it.next().cloned().ok_or("--export needs a path")?),
             "--print" => print = true,
@@ -197,11 +204,7 @@ fn run(args: &[String]) -> Result<(), String> {
     }
     let mut s = Session::new();
     open(&mut s, input.as_deref(), sample)?;
-    for c in cmds {
-        let (id, p) = match c.split_once('=') {
-            Some((id, j)) => (id.to_string(), serde_json::from_str::<Value>(j).map_err(|e| format!("{id}: bad JSON: {e}"))?),
-            None => (c.clone(), json!({})),
-        };
+    for (id, p) in cmds {
         let r = s.execute(&id, &p).map_err(|e| e.to_string())?;
         if print {
             outln!("{id} → {r}");
@@ -214,6 +217,24 @@ fn run(args: &[String]) -> Result<(), String> {
         s.execute("file.export", &json!({"path": p})).map_err(|e| e.to_string())?;
     }
     Ok(())
+}
+
+/// The steps of a script file, in order with any `--cmd`: one `{"command": "<id>", "params": {...}}`
+/// object per line; blank lines and lines starting with `#` are skipped. A file has no
+/// command-line length limit.
+fn script_steps(path: &str) -> Result<Vec<(String, Value)>, String> {
+    let text = std::fs::read_to_string(path).map_err(|e| format!("{path}: {e}"))?;
+    let mut steps = vec![];
+    for (n, line) in text.lines().enumerate() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let v: Value = serde_json::from_str(line).map_err(|e| format!("{path}:{}: bad JSON: {e}", n + 1))?;
+        let id = v.get("command").and_then(Value::as_str).ok_or_else(|| format!("{path}:{}: needs a `command` field", n + 1))?;
+        steps.push((id.to_string(), v.get("params").cloned().unwrap_or_else(|| json!({}))));
+    }
+    Ok(steps)
 }
 
 fn describe(id: Option<&str>) -> Result<(), String> {
@@ -277,4 +298,38 @@ fn mcp(args: &[String]) -> Result<(), String> {
     let mut server = Server::new(backend);
     let stdin = std::io::stdin();
     server.serve(stdin.lock(), std::io::stdout()).map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn args(values: &[&str]) -> Vec<String> {
+        values.iter().map(|v| (*v).to_string()).collect()
+    }
+
+    #[test]
+    fn run_takes_its_steps_from_a_script_file() {
+        let dir = std::env::temp_dir().join(format!("deckcraft-cli-script-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let (script, output) = (dir.join("steps.jsonl"), dir.join("out.pptx"));
+        let long = "x".repeat(200_000);
+        let lines = [
+            "# a script holds what a command line cannot".to_string(),
+            r#"{"command": "slide.new", "params": {"layout": "titleAndContent", "title": "Scripted", "body": "B"}}"#.to_string(),
+            String::new(),
+            format!(r#"{{"command": "slide.new", "params": {{"layout": "titleOnly", "title": "{long}"}}}}"#),
+        ];
+        std::fs::write(&script, lines.join("\n")).unwrap();
+        let (s, o) = (script.to_string_lossy().to_string(), output.to_string_lossy().to_string());
+        run(&args(&["--script", &s, "--save", &o])).unwrap();
+        let mut session = Session::new();
+        open(&mut session, Some(&o), false).unwrap();
+        let deck = session.execute("document.inspect", &json!({})).unwrap().to_string();
+        std::fs::write(&script, r#"{"params": {}}"#).unwrap();
+        let missing = run(&args(&["--script", &s]));
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert!(deck.contains("Scripted") && deck.contains(&long));
+        assert!(missing.is_err_and(|e| e.contains("needs a `command` field")));
+    }
 }
