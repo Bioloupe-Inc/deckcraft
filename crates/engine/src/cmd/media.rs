@@ -84,21 +84,55 @@ fn seek(s: &mut Session, p: &Value) -> Result<Value> {
     request(s, p, "media.seek", "seek", Some(ms))
 }
 
-pub(crate) fn probe_json(info: &deckcraft_media::MediaInfo) -> Value {
-    json!({
-        "container": info.container,
-        "durationMs": info.duration_ms,
-        "playable": info.playable(),
-        "audio": info.audio.as_ref().map(|a| json!({"codec": a.codec, "sampleRate": a.sample_rate, "channels": a.channels, "decodable": a.decodable})),
-        "video": info.video.as_ref().map(|v| json!({"codec": v.codec, "width": v.width, "height": v.height, "fps": (v.fps * 1000.0).round() / 1000.0, "frames": v.frames, "decodable": v.decodable})),
+/// What inserting media and `media.info` read from its bytes.
+pub(crate) struct Probe {
+    pub duration_ms: u32,
+    pub width: u32,
+    pub height: u32,
+    pub has_audio: bool,
+    pub has_video: bool,
+    pub decodable_video: bool,
+    pub playable: bool,
+    /// The audio then the video codec.
+    pub codecs: Vec<String>,
+    /// `{container, durationMs, playable, audio?, video?}`.
+    pub json: Value,
+}
+
+#[cfg(feature = "media")]
+pub(crate) fn probe(bytes: &std::sync::Arc<Vec<u8>>) -> std::result::Result<Probe, String> {
+    let info = deckcraft_media::probe(bytes).map_err(|e| e.to_string())?;
+    let (width, height) = info.video.as_ref().map(|v| (v.width, v.height)).unwrap_or((0, 0));
+    Ok(Probe {
+        duration_ms: info.duration_ms.min(u32::MAX as u64) as u32,
+        width,
+        height,
+        has_audio: info.audio.is_some(),
+        has_video: info.video.is_some(),
+        decodable_video: info.video.as_ref().is_some_and(|v| v.decodable),
+        playable: info.playable(),
+        codecs: info.audio.iter().map(|a| a.codec.clone()).chain(info.video.iter().map(|v| v.codec.clone())).collect(),
+        json: json!({
+            "container": info.container,
+            "durationMs": info.duration_ms,
+            "playable": info.playable(),
+            "audio": info.audio.as_ref().map(|a| json!({"codec": a.codec, "sampleRate": a.sample_rate, "channels": a.channels, "decodable": a.decodable})),
+            "video": info.video.as_ref().map(|v| json!({"codec": v.codec, "width": v.width, "height": v.height, "fps": (v.fps * 1000.0).round() / 1000.0, "frames": v.frames, "decodable": v.decodable})),
+        }),
     })
+}
+
+/// Built without the `media` feature: media bytes aren't read (they still embed and round-trip).
+#[cfg(not(feature = "media"))]
+pub(crate) fn probe(_bytes: &std::sync::Arc<Vec<u8>>) -> std::result::Result<Probe, String> {
+    Err("media isn't read in this build (deckcraft-engine's `media` feature)".into())
 }
 
 fn info(s: &mut Session, p: &Value) -> Result<Value> {
     let (id, m) = target(s, p, "media.info")?;
     let st = s.doc()?;
     let item = st.doc.media(m.media).ok_or_else(|| EngineError::Other("the media data is missing".into()))?;
-    let probe = deckcraft_media::probe(&item.data).map(|i| probe_json(&i)).unwrap_or_else(|e| json!({"error": e.to_string()}));
+    let probe = probe(&item.data).map(|p| p.json).unwrap_or_else(|e| json!({"error": e}));
     Ok(json!({
         "id": id,
         "name": item.name,
@@ -120,7 +154,8 @@ fn info(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 /// A poster frame PNG for video bytes at `ms`.
-pub(crate) fn poster_png(bytes: &deckcraft_media::Bytes, ms: u64) -> Option<Vec<u8>> {
+#[cfg(feature = "media")]
+pub(crate) fn poster_png(bytes: &std::sync::Arc<Vec<u8>>, ms: u64) -> Option<Vec<u8>> {
     match deckcraft_media::poster_png(bytes, ms as f64 / 1000.0) {
         Ok(png) => Some(png),
         Err(e) => {
@@ -128,6 +163,12 @@ pub(crate) fn poster_png(bytes: &deckcraft_media::Bytes, ms: u64) -> Option<Vec<
             None
         }
     }
+}
+
+/// Built without the `media` feature: no frames are decoded.
+#[cfg(not(feature = "media"))]
+pub(crate) fn poster_png(_bytes: &std::sync::Arc<Vec<u8>>, _ms: u64) -> Option<Vec<u8>> {
+    None
 }
 
 fn poster_frame(s: &mut Session, p: &Value) -> Result<Value> {

@@ -18,7 +18,7 @@ deckcraft-render = { workspace = true }
 deckcraft-pdf = { workspace = true }
 deckcraft-format = { workspace = true }
 deckcraft-pptx = { workspace = true }
-deckcraft-media = { workspace = true }
+deckcraft-media = { workspace = true, optional = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 i_overlay = { workspace = true }
@@ -27,7 +27,10 @@ log = { workspace = true }
 image = { workspace = true }
 
 [features]
-default = ["last-resort-font"]
+default = ["media", "last-resort-font"]
+# Reading embedded audio and video: probing on insert and in `media.info`, poster frames
+# (deckcraft-media and its codecs). Without it media still embeds and round-trips, unplayed.
+media = ["dep:deckcraft-media"]
 # deckcraft-fonts' compiled-in last-resort face.
 last-resort-font = ["deckcraft-fonts/last-resort-font"]
 
