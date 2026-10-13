@@ -26,5 +26,10 @@ thiserror = { workspace = true }
 log = { workspace = true }
 image = { workspace = true }
 
+[features]
+default = ["last-resort-font"]
+# deckcraft-fonts' compiled-in last-resort face.
+last-resort-font = ["deckcraft-fonts/last-resort-font"]
+
 [dev-dependencies]
 epaint_default_fonts = "0.36"
