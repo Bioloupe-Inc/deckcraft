@@ -931,8 +931,8 @@ impl Session {
     }
 
     /// Smart guides: snap `r` edges/centres to the slide and other shapes. Returns the offset to
-    /// apply and the guides to draw.
-    fn snap_rect(&self, r: Rect, exclude: &[ShapeId], tol: f64, enabled: bool) -> (Vec2, Vec<Guide>) {
+    /// apply and the guides to draw. Public for frontends that run a drag themselves.
+    pub fn snap_rect(&self, r: Rect, exclude: &[ShapeId], tol: f64, enabled: bool) -> (Vec2, Vec<Guide>) {
         let Some(st) = self.active() else { return (Vec2::ZERO, vec![]) };
         if !enabled || !self.prefs.smart_guides {
             return (Vec2::ZERO, vec![]);
@@ -997,7 +997,9 @@ impl Session {
         (off, guides)
     }
 
-    fn snap_resize(&mut self, x: Xfrm, _orig: &Xfrm, handle: u8, id: ShapeId, tol: f64) -> Xfrm {
+    /// Snap the edges `handle` moves of a resized box `x` (from [`resize_box`]) to the slide and
+    /// other shapes; the guides land in `tool.guides`. Rotated boxes don't snap.
+    pub fn snap_resize(&mut self, x: Xfrm, _orig: &Xfrm, handle: u8, id: ShapeId, tol: f64) -> Xfrm {
         if x.rot != 0.0 {
             self.tool.guides.clear();
             return x;
