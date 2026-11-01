@@ -569,7 +569,9 @@ pub(crate) fn format_run(s: &mut Session, f: &(dyn Fn(&mut RunProps) + Send + Sy
     if ids.is_empty() {
         return Err(bad("format", "select text or a shape"));
     }
+    let master_view = st.selection.target != Target::Slides;
     edit_shapes(s, &json!({"ids": ids}), "format", |sh| {
+        let placeholder = sh.ph.is_some();
         match &mut sh.kind {
             ShapeKind::Table(t) => {
                 for row in &mut t.rows {
@@ -581,6 +583,20 @@ pub(crate) fn format_run(s: &mut Session, f: &(dyn Fn(&mut RunProps) + Send + Sy
             _ => {
                 let body = sh.text.get_or_insert_with(TextBody::default);
                 ed::format_all(body, f);
+                // In Slide Master view a placeholder's list style is what slides inherit, so the
+                // formatting goes there too (level 1, and every level it already styles).
+                if master_view && placeholder {
+                    let levels = &mut body.list_style.levels;
+                    if levels.is_empty() {
+                        levels.push(None);
+                    }
+                    for (i, slot) in levels.iter_mut().enumerate() {
+                        let level = if i == 0 { Some(slot.get_or_insert_with(Default::default)) } else { slot.as_mut() };
+                        if let Some(l) = level {
+                            f(&mut l.run);
+                        }
+                    }
+                }
             }
         }
         Ok(())
