@@ -580,3 +580,35 @@ fn typed_characters_are_one_undo_step() {
     s.execute("edit.undo", &json!({})).unwrap();
     assert_eq!(s.execute("text.get", &json!({"id": id})).unwrap()["text"], "Hi");
 }
+
+/// What a template build sets on a layout in Slide Master view (a placeholder's text colour and
+/// box) survives a .pptx save and is what a slide added on that layout gets.
+#[test]
+fn layout_placeholder_colour_and_box_reach_new_slides_through_pptx() {
+    use deckcraft_model::{ColorRef, Fill, PhType, resolve};
+    let mut s = session();
+    let layout = |s: &Session, name: &str| s.doc().unwrap().doc.masters[0].layouts.iter().position(|l| l.name == name).unwrap();
+    let ph = |s: &Session, kind: PhType| s.doc().unwrap().shapes().iter().find(|x| x.ph_type() == Some(kind)).unwrap().id.0;
+
+    s.execute("view.slideMaster", &json!({"layout": layout(&s, "Title Slide")})).unwrap();
+    s.execute("edit.select", &json!({"ids": [ph(&s, PhType::CtrTitle)]})).unwrap();
+    s.execute("format.color", &json!({"color": "bg1"})).unwrap();
+    s.execute("view.slideMaster", &json!({"layout": layout(&s, "Title Only")})).unwrap();
+    s.execute("edit.select", &json!({"ids": [ph(&s, PhType::Title)]})).unwrap();
+    s.execute("shape.setBounds", &json!({"x": 44, "y": 80, "w": 872, "h": 52})).unwrap();
+    s.execute("view.closeMaster", &json!({})).unwrap();
+
+    let data = s.execute("file.saveBytes", &json!({"format": "pptx"})).unwrap()["data"].as_str().unwrap().to_string();
+    s.execute("file.openBytes", &json!({"name": "t.pptx", "data": data})).unwrap();
+    s.execute("slide.new", &json!({"layout": "Title Slide", "title": "Cover"})).unwrap();
+    s.execute("slide.new", &json!({"layout": "Title Only", "title": "Frame"})).unwrap();
+
+    let st = s.doc().unwrap();
+    let n = st.doc.slides.len();
+    let cover = &st.doc.slides[n - 2];
+    let ctx = resolve::Ctx::for_slide(&st.doc, cover).unwrap();
+    let title = cover.shapes.iter().find(|x| x.ph_type() == Some(PhType::CtrTitle)).unwrap();
+    assert_eq!(resolve::level_style(&ctx, title, 0).run.fill, Some(Fill::solid(ColorRef::scheme(deckcraft_color::SchemeSlot::Bg1))));
+    let v = s.execute("slide.inspect", &json!({"index": n - 1})).unwrap();
+    assert_eq!(v["shapes"][0]["box"], json!([44.0, 80.0, 872.0, 52.0]));
+}
