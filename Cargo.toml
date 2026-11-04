@@ -61,7 +61,7 @@ krilla = { version = "0.8", features = ["pdf"] }
 resvg = { version = "0.48", default-features = false }
 i_overlay = "9"
 quick-xml = "0.38"
-zip = { version = "3", default-features = false, features = ["deflate"] }
+zip = { version = "9", default-features = false, features = ["deflate"] }
 
 # ui
 egui = "0.36"
